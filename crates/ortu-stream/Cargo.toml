@@ -15,7 +15,14 @@ publish.workspace = true
 [dependencies]
 ortu-core.workspace = true
 ortu-crypto.workspace = true
+ortu-normalize.workspace = true
 ortu-tr.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true
