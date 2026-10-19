@@ -12,9 +12,14 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
-# Intentionally dependency-free: this crate is pure, performs no I/O and is
-# the most heavily fuzzed part of the system (docs/systemdesign.md, 4.4).
+# Pure: no I/O and no global state. The only runtime dependency provides NFC
+# normalization, which the standard library lacks (ADR-0004).
 [dependencies]
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

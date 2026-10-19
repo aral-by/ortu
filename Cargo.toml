@@ -11,6 +11,8 @@ members = [
     "crates/ortu-tr",
     "xtask",
 ]
+# The fuzz targets live in their own workspace (cargo-fuzz needs nightly).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.0.0"
@@ -39,6 +41,11 @@ ortu-tr = { path = "crates/ortu-tr", version = "0.0.0" }
 
 # External crates.
 clap = { version = "4.5", features = ["derive"] }
+unicode-normalization = "0.1"
+
+# Test-only crates.
+insta = { version = "1.40", default-features = false }
+proptest = { version = "1.5", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
