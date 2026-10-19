@@ -12,8 +12,14 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+# RustCrypto only; custom cryptographic implementations are forbidden (section 10.7).
 [dependencies]
+hkdf.workspace = true
+hmac.workspace = true
 ortu-core.workspace = true
+ortu-normalize.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
