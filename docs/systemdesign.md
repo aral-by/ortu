@@ -98,6 +98,23 @@ A deterministic, auditable engine that is **speech-aware**, **Turkish-native** a
 - Languages other than Turkish. The architecture is extensible, but v1 targets Turkish only.
 - Framework integrations (LiveKit Agents, Pipecat and similar). ortu exposes a framework-neutral API; adopters write the wiring (§21).
 
+### 2.1 Use cases
+
+Speech is the priority (G10); every other use case reuses the same engine through a later milestone. The README mirrors this table.
+
+| Use case | What ortu does | Delivered in | Scope notes |
+|---|---|---|---|
+| Call-center transcripts (municipalities, hospitals, banks, couriers) | Detects and masks spoken PII in STT output before transcripts are stored or analyzed | v0.1 (M0-M3); remaining detectors M4 | The origin of the project |
+| Call recordings | Beeps out the regions where PII was spoken (§11) | M6 | Speech channel, PostCall only |
+| Filter in front of an LLM | Tokenizes before text reaches the LLM; rehydrates answers and tool calls under provenance checks (§10.8) | M3 as a library; an OpenAI-compatible gateway on `ortu-server` after M10 | The gateway is a separate product surface (§4.3) |
+| Chatbot, webchat, WhatsApp | Same engine on `Channel::Text` | M4 (text defaults), full support v1.x | |
+| Emails and support tickets | Written-channel redaction | v1.x | |
+| Log scrubbing | Batch redaction of text logs | M8 (`ortu redact --format text`) | No log-pipeline plugins are planned |
+| CI checks | Fails a build when PII enters a repository, fixtures or logs | M8 (`ortu scan --fail-on-pii`, exit code 4, ADR-0002) | |
+| Training data preparation | Batch redaction before training or fine-tuning | M8 (CLI and Python) | Indirect identifiers (job plus district, rare conditions) are not detected |
+| OCR output | Redaction of text from scanned documents and forms | After v1 | Needs an OCR error model (`0/O`, `1/l`) next to the STT noise model (§14.1) |
+| Moving data to test environments | Masks free-text fields when production data is copied | M8 for free text | Structured columns with realistic fake values need surrogates, which v1 excludes (D9, §10.9); database connectors are a separate product |
+
 ---
 
 ## 3. Legal framework and threat model

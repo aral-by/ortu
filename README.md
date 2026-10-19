@@ -21,6 +21,23 @@ General-purpose PII tools work on written, well-formed text. Turkish call-center
 | Use Turkish formats | TCKN, VKN, TR IBAN, plates | Ships Turkish validators and gazetteers |
 | Talk to an LLM agent | "query my debt" | Tokens for the LLM; real values only at the tool boundary, with provenance checks |
 
+## Use cases
+
+ortu is pre-alpha: the table says what each use case gets from ortu and the milestone that delivers it. Details and the reasoning behind each scope decision are in [systemdesign.md §2.1](docs/systemdesign.md#21-use-cases).
+
+| Use case | What ortu does | Planned in |
+|---|---|---|
+| **Call-center transcripts** (the starting point): municipalities, hospitals, banks, couriers, any organization talking to citizens or customers by phone | Detects spoken TCKN, IBAN, phone numbers and names in STT output and masks them before transcripts are stored or analyzed | v0.1 (M0-M3), more detectors in M4 |
+| **Call recordings** | Beeps out the parts of archived calls where personal data was spoken | M6 |
+| **Filter in front of an LLM** (OpenAI, Claude, Gemini and others) | Replaces personal data with tokens before text leaves for the LLM and restores real values in the answer and in tool calls, with provenance checks | M3 (library API); an OpenAI-compatible gateway on `ortu-server` after M10 |
+| **Chatbot, webchat and WhatsApp conversations** | The same engine on written text (`Channel::Text`) | M4 (text defaults), full support in v1.x |
+| **Emails and support tickets** | Written-channel redaction of incoming mail and ticket text | v1.x |
+| **Log scrubbing** | Masks TCKN, phone and card numbers that leaked into application logs, as a batch job | M8 (`ortu redact --format text`) |
+| **CI checks** | Fails a build when personal data enters the repository, test fixtures or logs | M8 (`ortu scan --fail-on-pii`, exit code 4) |
+| **Training data preparation** | Cleans real customer conversations before they are used to train or fine-tune a model | M8 (batch CLI and Python); indirect identifiers such as job plus district are not detected |
+| **OCR output** | Redacts text extracted from scanned documents, forms and petitions | After v1: needs an OCR error model next to the STT one |
+| **Moving data to test environments** | Masks free-text fields (notes, transcripts) when copying production data | M8 for free text; structured columns with realistic fake values are out of scope ([D9](docs/systemdesign.md#d9-no-surrogates-in-v1)) |
+
 ## How it works
 
 ```mermaid
