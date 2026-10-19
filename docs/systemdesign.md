@@ -114,6 +114,9 @@ Speech is the priority (G10); every other use case reuses the same engine throug
 | Training data preparation | Batch redaction before training or fine-tuning | M8 (CLI and Python) | Indirect identifiers (job plus district, rare conditions) are not detected |
 | OCR output | Redaction of text from scanned documents and forms | After v1 | Needs an OCR error model (`0/O`, `1/l`) next to the STT noise model (§14.1) |
 | Moving data to test environments | Masks free-text fields when production data is copied | M8 for free text | Structured columns with realistic fake values need surrogates, which v1 excludes (D9, §10.9); database connectors are a separate product |
+| Pseudonymized analytics and reporting | Tenant-scope tokens let reports count and link records per person without raw values | M3 (tokens), M8 (batch) | Linking across calls is an explicit opt-in (D6) |
+| Right to erasure | Crypto-shredding of a call's vault records or of a whole key period | M5 | Covers ortu's vault; the adopter erases its own copies |
+| Audited access to raw values | A raw value is revealed only with a stated reason, and every reveal is audited | M5 | |
 
 ---
 
@@ -153,6 +156,26 @@ If the engine encounters an error (parse error, unreachable key, timeout), it **
 
 - `FailMode::Block` (default): return an error; no text flows.
 - `FailMode::RedactAll`: pass the text through with every digit sequence and every name candidate redacted.
+
+### 3.4 KVKK alignment: what ortu contributes and where it stops
+
+ortu is a data-minimization layer. The table maps KVKK principles and duties to what ortu does; everything else stays with the data controller and the adopter.
+
+| KVKK | ortu's contribution | Delivered in |
+|---|---|---|
+| Art. 4/2(ç): relevant, limited and proportionate processing (minimization) | Personal data the next system does not need never reaches it: LLMs, transcripts, search indexes, analytics, logs, training sets | M3 (LLM loop, persistence), M8 (batch) |
+| Art. 4/2(c): specified, explicit and legitimate purposes | Per-tenant, per-kind policy; real values are released only at the tool boundary that needs them, under provenance checks | M2, M3 |
+| Art. 6: special categories of personal data (health, religion, ethnicity and others) | A health term lexicon marks sentences for a per-tenant policy: mask the sentence, mask it only in persisted copies, or flag it | M4b; model-based detection after M7 (§8.4) |
+| Art. 7: erasure | Crypto-shredding per call or per key period | M5 |
+| Art. 9: transfer abroad | Reduces what is sent to LLM and STT providers abroad; does not remove the obligation | M3 |
+| Art. 12: data security measures | Raw values cannot be printed or logged; encrypted vault; every reveal audited; fail-closed processing | M2, M5 |
+
+**Where ortu stops.** The sentence *"Ben buranın muhtarı Mehmet Yılmaz, annem kemoterapi gören kadın, anneme personeller çok kötü davranmış, kadın bayılmış"* shows the limits:
+
+- **Content an assistant must understand cannot be masked.** The bot needs the complaint to route it. ortu can mask the name (M4) and mark the health term (M4b), but the meaning of the complaint reaches the LLM. For services where such content is routine (health, social services), the LLM must run where it may see it: in-country or self-hosted.
+- **Indirect identifiers survive masking.** "buranın muhtarı" identifies one person even when the name is masked. ortu flags unique roles (M4b) and generalizes indirect identifiers in batch use (v1.x); protecting whole datasets needs dataset-level techniques such as k-anonymity.
+- **Audio sent to a cloud STT provider** has left before ortu runs (§2).
+- **Legal duties stay with the controller:** legal basis, information notices, contracts with providers, retention periods and registry obligations. ortu never claims to make a system compliant (§3.1).
 
 ---
 
@@ -1081,6 +1104,7 @@ Techniques:
 | **M3** | Session and LLM loop | Realtime/PostCall modes, cross-turn assembly, session map, `rehydrate`, streaming `Rehydrator`, `guard_tool_args` (provenance check), basic `ortu-py` API | Agent question then caller answer scenario; TCKN split across 3 turns; zero hold-back in Realtime; the rehydration and provenance proptests from §16; end-to-end example from Python |
 | **v0.1** | **Vertical slice** | M0 to M3 | Can run in **shadow mode** inside a voice agent: produces metrics only (kind, score, latency; no raw values) without affecting decisions |
 | **M4** | Remaining detectors | VKN, card (with CVV and expiry), email, plate, birth date, passport, address (rule-based), name gazetteer; Text channel defaults | M2 test criteria for every new kind; Text channel tests |
+| **M4b** | Extended Turkish identifiers and sensitive terms | One-time codes and PINs, mother's maiden name and father's name, ID card serial numbers, IMEI (Luhn), VIN, cadastral parcels (`ada`/`parsel`), amounts after a personal cue (`borcum`, `maaşım`), configurable custom identifiers (subscriber and customer numbers); a health term lexicon with a per-tenant special-category policy; a unique-role flag for indirect identifiers (`muhtar`) | M2 test criteria for every new kind; formats verified against official sources (ADR); in the §3.4 example sentence the name is masked and the health term is marked |
 | **M5** | Transforms and cryptography | `Redact`/`Mask`/`Encrypt`, vault traits, SQLite and in-memory vaults, reveal with audit, shred | Round-trip proptest; tampering with AAD makes decryption fail; log leak test green |
 | **M6** | Audio | Span to time, padding, merging, tone and silence, crossfade, channel selection | Region accuracy within one sample on synthetic WAV; no click at crossfades (spectral test); 200x real time |
 | **M7** | Evaluation and benchmarks | Synthetic generator, metrics, LLM robustness measurement, Presidio baseline, calibration, report generation | `cargo xtask eval` produces the report in one command; TCKN/IBAN/phone recall >= 0.98; leak rate reported; benchmark results in the README |
@@ -1251,6 +1275,7 @@ Each entry records the context, the options considered, the decision and its con
 6. **LLM robustness of the token format:** Measure in M3 how often `[TCKN:7f3a9c2e]` is corrupted by different LLMs; change the format through an ADR if needed.
 7. **`ortu-server` protocol order:** gRPC or HTTP first? (Recommended: HTTP first, then gRPC.)
 8. **Nomadic `850` numbers:** the numbering plan lists them as location-independent numbers. They are mostly held by businesses but can be assigned to individuals; M2 does not treat them as personal. Decide with evidence from shadow mode.
+9. **Default policy for special categories:** `mask_sentence`, `persist_only` (the assistant sees the sentence; persisted copies are masked) or `flag`. Recommended default: `persist_only`. Decide with adopters in M4b.
 
 ---
 

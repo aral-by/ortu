@@ -37,6 +37,9 @@ ortu is pre-alpha: the table says what each use case gets from ortu and the mile
 | **Training data preparation** | Cleans real customer conversations before they are used to train or fine-tune a model | M8 (batch CLI and Python); indirect identifiers such as job plus district are not detected |
 | **OCR output** | Redacts text extracted from scanned documents, forms and petitions | After v1: needs an OCR error model next to the STT one |
 | **Moving data to test environments** | Masks free-text fields (notes, transcripts) when copying production data | M8 for free text; structured columns with realistic fake values are out of scope ([D9](docs/systemdesign.md#d9-no-surrogates-in-v1)) |
+| **Pseudonymized analytics and reporting** | Reports count and link records per person through tokens, without raw values | M3 (tokens), M8 (batch) |
+| **Right to erasure** | Deletes a call's encrypted values or destroys a key period (crypto-shredding) | M5 |
+| **Audited access to raw values** | Reveals a value only with a stated reason, and audits every reveal | M5 |
 
 ## How it works
 
@@ -74,7 +77,7 @@ flowchart LR
 | M2 | Core detectors (TCKN, phone, IBAN, names), scoring, tokens | Done |
 | M3 | Sessions, Realtime/PostCall modes, rehydration, Python API | Next |
 | **v0.1** | **Vertical slice, ready for shadow mode** | |
-| M4 to M10 | Remaining detectors, vault, audio, evaluation, CLI, release, server | Planned |
+| M4 to M10 | Remaining detectors, extended Turkish identifiers and health terms (M4b), vault, audio, evaluation, CLI, release, server | Planned |
 
 Details and acceptance criteria: [systemdesign.md, section 17](docs/systemdesign.md#17-milestones-and-acceptance-criteria).
 
@@ -113,9 +116,17 @@ cargo xtask check        # the quality gate every commit passes
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details on the quality gate.
 
-## Legal note
+## KVKK and data minimization
 
-ortu performs **pseudonymization**, which supports KVKK data minimization. It does not make data anonymous in the legal sense, does not by itself make a system KVKK-compliant, and does not protect audio sent to a cloud STT provider before ortu sees it. This is not legal advice.
+ortu is a **data-minimization layer**: personal data that the next system does not need (an LLM, a transcript store, a search index, analytics, logs, a training set) never reaches it. It supports the KVKK principles of minimization and purpose limitation, the security measures of Article 12 and, with the vault, erasure through crypto-shredding. The mapping is in [systemdesign.md §3.4](docs/systemdesign.md#34-kvkk-alignment-what-ortu-contributes-and-where-it-stops).
+
+What ortu does not do, illustrated by one realistic sentence: *"Ben buranın muhtarı Mehmet Yılmaz, annem kemoterapi gören kadın, anneme personeller çok kötü davranmış, kadın bayılmış"*
+
+- The bot must understand the complaint to route it, so its meaning, including the mother's health, reaches the LLM. ortu masks the name and marks the health term; for services where such content is routine, the LLM has to run in-country or self-hosted.
+- "buranın muhtarı" identifies one person even with the name masked. ortu flags unique roles, but indirect identifiers cannot be removed by masking single sentences.
+- Audio sent to a cloud STT provider has left before ortu runs.
+
+ortu performs **pseudonymization**: it does not make data anonymous in the legal sense and does not by itself make a system KVKK-compliant. Legal basis, information notices, contracts and retention stay with the data controller. This is not legal advice.
 
 ## Origin
 

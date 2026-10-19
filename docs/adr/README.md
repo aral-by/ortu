@@ -19,3 +19,4 @@ An ADR records one decision that deviates from, refines or fills a gap in [syste
 | [0004](0004-normalization-data-and-dependencies.md) | Normalization data, dependencies and types | Accepted |
 | [0005](0005-fuzzing-on-windows.md) | Randomized stress tests where coverage-guided fuzzing is unavailable | Accepted |
 | [0006](0006-detection-and-scoring-decisions.md) | Detection and scoring decisions made in M2 | Accepted |
+| [0007](0007-kvkk-alignment-and-extended-scope.md) | KVKK alignment and extended scope | Accepted |
