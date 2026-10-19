@@ -9,6 +9,7 @@ members = [
     "crates/ortu-normalize",
     "crates/ortu-stream",
     "crates/ortu-tr",
+    "xtask",
 ]
 
 [workspace.package]

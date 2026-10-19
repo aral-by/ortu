@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+description = "Development automation for the ortu workspace; never published"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+# No dependencies on purpose: the quality gate must build in seconds on a clean
+# checkout and must not pull anything into Cargo.lock that the product does not use.
+[dependencies]
+
+[lints]
+workspace = true
