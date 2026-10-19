@@ -256,10 +256,10 @@ Rule: the Python binding and the server only wrap the core. Detection, normaliza
 | `ortu-tr` | Turkish detectors, validators and gazetteers | `ortu-core` | M0 |
 | `ortu-crypto` | HMAC tokens, AES-GCM vault, `KeyProvider`, zeroization | `ortu-core` | M0 |
 | `ortu-audio` | Timestamp mapping, PCM masking, WAV I/O | `ortu-core` | M0 |
-| `ortu-stream` | Session API, Realtime/PostCall modes, cross-turn assembler, session map, rehydration, provenance check | `ortu-core`, `ortu-tr`, `ortu-crypto` | M0 |
+| `ortu-stream` | `Engine` and session API, Realtime/PostCall modes, cross-turn assembler, session map, rehydration, provenance check | `ortu-core`, `ortu-normalize`, `ortu-tr`, `ortu-crypto` | M0 |
 | `ortu-cli` | The `ortu` binary | every crate except `ortu-eval` | M0 |
 | `ortu-eval` | Synthetic data generator, metrics, baseline comparison | every crate except `ortu-cli` | M0 |
-| `ortu-py` | PyO3 binding (maturin); thin, framework-neutral wrapper | every library crate | M3 |
+| `ortu-py` | PyO3 binding (maturin, stable ABI); thin, framework-neutral wrapper | `ortu-stream`, and the types of `ortu-core` and `ortu-crypto` | M3 |
 | `ortu-ner` (optional) | ONNX-based NER behind a feature flag | `ortu-core` | v1.1 |
 | `ortu-server` | HTTP + gRPC service (`axum` + `tonic`), session management, health and metrics | every library crate | M10 |
 
@@ -390,15 +390,18 @@ This prevents PII from leaking through `println!`, `tracing` or `serde_json` **a
 ### 5.5 Output
 
 ```rust
-pub struct RedactionResult {
-    pub turns: Vec<RedactedTurn>,          // masked text
-    pub entities: Vec<EntityReport>,       // NO RAW VALUES: kind, span, score, token, evidence
-    pub audio_regions: Vec<AudioRegion>,   // input to audio redaction
-    pub stats: RunStats,
+pub struct PostCallResult {
+    pub turns: Vec<RedactedTurn>,          // masked text, one per input turn
+    pub entities: Vec<EntityReport>,       // NO RAW VALUES: kind, parts, span, score, validator, replacement
+}
+
+pub struct EntityReport {
+    pub parts: Vec<WordSpan>,              // one part per turn; several when the value was spread over turns
+    // id, kind, span, score, review, validator, replacement, detector, cross_turn
 }
 ```
 
-The JSON schema is versioned under `schemas/redaction_result.v1.json`.
+Realtime returns a `MaskedTurn` per pushed turn with the same entity reports. Audio regions (§11) are derived from the entity parts in M6. The JSON schema of the CLI and server output is versioned under `schemas/` from M8.
 
 ---
 
@@ -505,6 +508,10 @@ Letter-by-letter reading is supported for the `TR` prefix of an IBAN, for email 
 
 Many letter names are also ordinary words (`ve`, `de`, `o`), so a spelled run needs at least two letters, or a single letter between two number words (the letter group of a plate such as `34 A 1234`). Downstream detectors validate every run. Letter names and spoken symbols live in `lexicon.rs`; email assembly from spoken symbols arrives with the email detector in M4.
 
+### 6.6 Written values
+
+Written text glues values to labels and separators: `TC:10000000146`, `tckn=10000000146`, `+905321234567`, `0532-123-45-67`, `IBAN:TR33-0006-1005-...`. `NormWord::written_value` reads the value inside such a word: a label before the last `:` or `=` is dropped, and a leading `+` and hyphens are removed. A digit-only result joins the lattice like a spoken digit group, so written and spoken values meet the same validators; the IBAN detector reads a written `TR` + 24 digits directly (§7.2). The Text channel is a first-class input: chat messages, forms and tool payloads go through the same pipeline (ADR-0008).
+
 ---
 
 ## 7. Candidate generation and detection (`ortu-tr`)
@@ -556,6 +563,7 @@ pub trait Validator: Send + Sync {
 - When read aloud, `TR` is often omitted: 24 digits plus an `iban` cue are validated with an assumed `TR` prefix.
 - The prefix may be spelled (`te re`), written (`TR`) or written with the check digits attached (`TR33`); the body then completes the prefix.
 - Partial: `iban` cue plus at least 16 digits is masked without a checksum (score floor 0.7).
+- Written as one word (`TR330006100519786457841326`, `IBAN:TR33-0006-...`): validated directly. A failed checksum is still masked, as `_INVALID` (score floor 0.7), because the shape alone is strong evidence.
 
 #### Phone
 
@@ -579,7 +587,7 @@ pub trait Validator: Send + Sync {
 
 Three layers:
 
-1. **Cue patterns (high confidence):** `adım X`, `ismim X`, `soyadım X`, `X Bey/Hanım`, `adım soyadım X Y`, and the caller's short answer (at most four words) after an assistant asks for a name. `ben X` arrives with the gazetteer in M4: without one, `ben belediyeden arıyorum` would mask `belediyeden`. A name never extends past punctuation in the source (`ismim Can, borcumu ...`), and titles that take an honorific (`Müdür Bey`) are not names.
+1. **Cue patterns (high confidence):** `adım X`, `ismim X`, `soyadım X`, `Sayın X`, `X Bey/Hanım`, `adım soyadım X Y`, and the caller's short answer (at most four words) after an assistant asks for a name. `ben X` arrives with the gazetteer in M4: without one, `ben belediyeden arıyorum` would mask `belediyeden`. A name never extends past punctuation in the source (`ismim Can, borcumu ...`), and titles that take an honorific (`Müdür Bey`) are not names.
 2. **Gazetteer (medium confidence):** Turkish first-name list (~10k) and surname list (~50k), matched with Aho-Corasick. The source license must be compatible with open source (ADR).
 3. **NER (optional, §8.4)**
 
@@ -650,7 +658,7 @@ score = sigmoid(logit)
 
 Weights live in `config/weights.toml` and are initially set by hand. In M7 they are calibrated on the evaluation set with a grid search or logistic regression, and the calibration report is written to `docs/calibration.md`.
 
-`decay(d) = exp(-d / tau)`, default tau = 6 words. `w_cue_i` is the boost of the rule that fired. When STT reports no confidence for the span, the STT term is 0. A cue from the previous assistant turn counts as a cue at the edge of its window; `w_cross` is reserved for values assembled across turns (M3). Partial-match floors (TCKN 0.7, IBAN 0.7) are applied after the sigmoid. `config/weights.toml` holds the initial weights, and a test keeps it equal to the compiled-in defaults.
+`decay(d) = exp(-d / tau)`, default tau = 6 words. `w_cue_i` is the boost of the rule that fired. When STT reports no confidence for the span, the STT term is 0. A cue from the previous assistant turn counts as a cue at the edge of its window; `w_cross` stays reserved and is fitted in M7; M3 scores values assembled across turns directly: 1.0 when the validator passes, 0.7 (the partial floor) while incomplete (ADR-0008). Partial-match floors (TCKN 0.7, IBAN 0.7) are applied after the sigmoid. `config/weights.toml` holds the initial weights, and a test keeps it equal to the compiled-in defaults.
 
 ### 8.2 Conflict resolution
 
@@ -713,15 +721,16 @@ Why two modes instead of one with hold-back: see decision D7 in §19.
 ### 9.2 API
 
 ```rust
-let mut session = engine.session(call_id, tenant_id, Mode::Realtime);
+let mut session = engine.session(call_id, tenant_id)?;   // Realtime
 for turn in stt_final_turns {
     let masked = session.push(turn)?;          // returns immediately; no hold-back
     send_to_llm(masked.text);
 }
-let post = session.finish()?;                  // PostCall: the whole call is reprocessed
-persist(post.transcript, post.entities, post.audio_regions);
-drop(session);                                 // the session map is zeroized (§10.8)
+let post = session.finish();                   // PostCall: the whole call is reprocessed;
+persist(post.turns, post.entities);            // the session map is zeroized (§10.8)
 ```
+
+The mode is not a parameter: `push` is Realtime, and `finish` and `Engine::redact(&transcript)` are PostCall. Both PostCall entry points share one implementation, so the output of `finish` equals batch `redact` over the same turns (ADR-0008).
 
 ### 9.3 Eager masking in Realtime mode
 
@@ -730,7 +739,10 @@ Realtime mode never holds turns back. It keeps session state and masks each inco
 - If a turn ends with an open digit sequence (for example a TCKN cue and 6 digits so far), the sequence is **masked immediately as partial PII** (`[TCKN_INCOMPLETE:...]`). Digits in the next turn are evaluated as a continuation of that sequence.
 - If the sequence is completed in a later turn, a new token is issued for the assembled value and placed in the masked text of the completing turn. The LLM uses that token in tool calls.
 - If an agent turn asked for PII (`"TC'nizi alabilir miyim"`), digit sequences in the following caller turn are scored as if a cue were present.
-- An open sequence can be continued across at most `max_open_turns = 3` turns, and closes when the topic changes.
+- An open sequence can be continued across at most `max_open_turns = 3` turns, and closes when the topic changes: a caller turn continues it only if its first content word starts a number. Assistant backchannels (`evet`, `hı hı`, `devam edin`) and the same question asked again keep it open; any other assistant turn closes it.
+- Digits (at least two) after a cue or question for a TCKN, IBAN or phone number that do not complete it are masked as unfinished (`[TCKN_INCOMPLETE:...]`) in both modes, even when the caller never finishes the value.
+- TCKNs, IBANs and phone numbers are assembled. The kind comes from the assistant's question, otherwise from a cue, most specific first (IBAN, TCKN, phone). Digits past the kind's length commit a valid prefix.
+- In PostCall mode, caller turns whose boundary a number crosses (with only backchannels or questions for an identifier between them) are analyzed as one turn, and the token of an entity spanning turns replaces each of its parts.
 - **Cost:** the false-positive rate is higher than in PostCall mode. An appointment time spoken right after a TCKN question may be masked too. This is accepted deliberately under the recall-first policy.
 
 ### 9.4 State machine (both modes)
@@ -839,7 +851,7 @@ Bundled implementations:
 ### 10.7 Memory safety
 
 - All keys and every `SecretValue` use `zeroize::Zeroizing`.
-- Token comparisons use `subtle::ConstantTimeEq`.
+- The session map is keyed by token label and digest. Digests are not secrets (the LLM holds every token it can present), so lookups need no constant-time comparison; two values under one token make it ambiguous, and resolving it fails (ADR-0008). Comparisons of secrets (vault, M5) use `subtle::ConstantTimeEq`.
 - `mlock` for keys is optional (feature `mlock`).
 - Crates: `aes-gcm`, `hmac`, `sha2`, `hkdf`, `rand_core` from the RustCrypto ecosystem. Custom cryptographic implementations are **forbidden**.
 
@@ -863,14 +875,10 @@ impl Session {
     pub fn rehydrator(&self) -> Rehydrator<'_>;
 
     /// Tokenizes an adopter-supplied value (caller ID, CRM field) before it is placed in a prompt.
-    pub fn register(&mut self, kind: EntityKind, value: SecretValue) -> Token;
+    pub fn register(&mut self, kind: EntityKind, value: &SecretValue) -> Token;
 
     /// Masks a tool result before it re-enters the LLM context; detected values join the map.
-    pub fn mask_tool_result(
-        &mut self,
-        tool: &str,
-        result: &serde_json::Value,
-    ) -> Result<serde_json::Value, GuardError>;
+    pub fn mask_tool_result(&mut self, tool: &str, result: &serde_json::Value) -> serde_json::Value;
 }
 ```
 
@@ -879,10 +887,10 @@ Every path into the LLM context (`push`, `register`, `mask_tool_result`) writes 
 Rules:
 
 1. **Tolerant matching.** LLMs corrupt tokens: they drop brackets, change case or insert spaces. `rehydrate` locates the kind plus hex8 core with a tolerant pattern. A token-like string with no entry in the map is never passed through silently; it yields `GuardError` (fail-closed).
-2. **Provenance check at the tool boundary.** Tool arguments are run through the detectors. Every PII-looking value in an argument must either be a token present in this session's map, or the argument must contain no PII at all. A raw TCKN, IBAN or phone number that is not in the map is a value the LLM invented or altered, and the call is **rejected** (`GuardError::UnknownValue`). This is what prevents an agent from querying another person's record.
-3. **Invalid values.** If an argument contains a token marked `_INCOMPLETE` or `_INVALID`, the call is rejected unless the tool definition explicitly allows it.
+2. **Provenance check at the tool boundary.** Tool arguments are run through the detectors, with JSON field names as cues (`tckn`, `phoneNumber`, `ad_soyad`) for identifier kinds; in tool results field names are cues for every kind, so `{"name": "Ahmet Yılmaz"}` is masked without an introducer. Every PII-looking value in an argument must either be a token present in this session's map, or the argument must contain no PII at all. A raw TCKN, IBAN or phone number that is not in the map is a value the LLM invented or altered, and the call is **rejected** (`GuardError::UnknownValue`). This is what prevents an agent from querying another person's record.
+3. **Invalid values.** If an argument contains a token marked `_INCOMPLETE` or `_INVALID`, the call is rejected unless the tool is explicitly allowed to receive that kind (`EngineBuilder::accept_invalid(tool, kind)`).
 4. **Streamed output.** LLM responses arrive in chunks, and a token can be split across two of them. The `Rehydrator` buffers only from a possible token start, and at most one token length; all other text passes through without delay.
-5. **Read-back policy.** Rehydration of text going to TTS or chat is configured per kind. By default TCKNs and card numbers are **not read back**; they are spoken in partially masked form (`*******8901`).
+5. **Read-back policy.** Rehydration of text going to TTS or chat is configured per kind. By default names and addresses are read back in full and every other kind only partially (`*******8901`); TCKNs and card numbers are never read back in full unless configured.
 6. **Lifecycle.** The map cannot be serialized or logged, and is never written to a shared store such as Redis or disk. It is zeroized on `finish()` or `drop`. Deployments should disable core dumps; the `mlock` feature is recommended to keep it out of swap (§10.7).
 7. **With `ortu-server`.** When the session lives in the server, the map lives in server memory. mTLS between client and server is mandatory, and sessions close on a TTL. The embedded library is preferred for the realtime loop (§4.3).
 
@@ -929,8 +937,8 @@ STT timestamps can drift by 100 to 300 ms. The padding values are measured and c
 ## 12. Observability and audit
 
 - Structured logging with `tracing`. **No log field ever contains a raw value.** This is guaranteed by the type system (§5.4) and by a dedicated test in the workspace test suite: the full pipeline runs on synthetic PII, the captured log output is searched for the raw values, and the test **fails** if any is found.
-- Audit event (`AuditEvent`): `call_id`, `tenant_id`, `entity_kind`, `token`, `detector`, `score`, `action` (`masked | revealed | shredded | tool_call_rejected | tool_args_released`), `actor`, `ts`. No raw values.
-- Audit events are delivered through the `AuditSink` trait, implemented by the adopter (database, log pipeline, SIEM). `reveal` fails if the sink cannot record the event (fail-closed).
+- Audit event (`AuditEvent`, `ortu-core`): `call_id`, `tenant_id`, `action`, `tool`, `kinds`, `reason`. No raw values. The sink adds the timestamp and the actor, which a crate without clocks or I/O does not know. M3 records the tool boundary (`tool_args_released`, `tool_call_rejected`); `masked`, `revealed` and `shredded` arrive with the vault (M5).
+- Audit events are delivered through the `AuditSink` trait, implemented by the adopter (database, log pipeline, SIEM); `DiscardAuditSink` is the default. Releasing tool arguments and `reveal` fail if the sink cannot record the event (fail-closed).
 - Metrics (the `metrics` crate, Prometheus-compatible):
   - `ortu_entities_total{kind}`
   - `ortu_latency_ms` (histogram)
@@ -946,16 +954,16 @@ STT timestamps can drift by 100 to 300 ms. The padding values are measured and c
 ### 13.1 Rust library
 
 ```rust
-let engine = ortu::Engine::builder()
-    .locale(Locale::TrTr)
-    .policy(Policy::from_file("ortu.toml")?)
-    .detectors(ortu_tr::default_detectors())
-    .key_provider(EnvKeyProvider::new())
-    .vault(SqliteVault::open("vault.db")?)
+let engine = ortu_stream::Engine::builder()
+    .policy(Policy::from_toml_str(&std::fs::read_to_string("ortu.toml")?)?)
+    .key_provider(EnvKeyProvider)               // required: tokens are keyed (§10.3)
+    .audit_sink(my_sink)                        // optional; events are discarded otherwise
     .build()?;
 
-let result = engine.redact(&transcript)?;
+let result = engine.redact(&transcript)?;       // PostCall over a whole transcript
 ```
+
+Detectors and cue rules default to `ortu_tr`; `.detectors(...)` and `.cue_rules(...)` replace them. The vault (`.vault(...)`) arrives in M5. Until a facade crate re-exports the API at release, the engine lives in `ortu-stream` (ADR-0008).
 
 ### 13.2 CLI
 
@@ -979,24 +987,25 @@ ortu normalize "on iki üç yüz kırk beş"             # debug: prints the lat
 ```python
 import ortu
 
-engine = ortu.Engine.from_config("ortu.toml")
+engine = ortu.Engine.from_config("ortu.toml")                # keys from ORTU_TOKEN_KEY
 
-# Batch processing
-result = engine.redact_words(words=[...], call_id="...")
+# Batch processing (PostCall)
+result = engine.redact([{"speaker": "caller", "text": "..."}], call_id="...")
 
 # Voice agent loop with an LLM
-session = engine.session(call_id="...", mode="realtime")
+session = engine.session(call_id="...")
 caller = session.register("phone", caller_id)                # token for the system prompt
-masked = session.push(turn)                                  # masked.text goes to the LLM
-args = session.guard_tool_args("query_debt", llm_args)       # real values; raises GuardError on rejection
+masked = session.push({"speaker": "caller", "words": [...]}) # masked["text"] goes to the LLM
+args = session.guard_tool_args("query_debt", llm_args)       # real values; raises ortu.GuardError on rejection
 result = session.mask_tool_result("query_debt", raw_result)  # tokens before the result reaches the LLM
 spoken = session.rehydrate(llm_reply)                        # applies the read-back policy
 post = session.finish()                                      # persistent transcript (PostCall)
 ```
 
-- The binding is a thin wrapper; all logic lives in the Rust core (§4.3).
+- The binding is a thin wrapper; all logic lives in the Rust core (§4.3). Turns, tool arguments and results are JSON-compatible Python objects, converted through Python's own `json` module. `ortu.GuardError` carries `reason` and `kind`.
+- `cargo xtask py` builds the extension into `.venv` with maturin and runs the Python tests and the example; it is a step of the quality gate.
 - The GIL is released during heavy work (`py.allow_threads`).
-- `abi3` wheels (Python 3.9+) for manylinux, macOS and Windows; how they are built without hosted CI is decided in M9 (ADR-0003).
+- `abi3` wheels (Python 3.9+, PyO3 with the stable ABI) for manylinux, macOS and Windows; how they are built without hosted CI is decided in M9 (ADR-0003).
 - Framework integrations (LiveKit Agents, Pipecat and similar) are out of scope; adopters build them on top of this API (§21).
 
 ### 13.4 Server (`ortu-server`, v1.x)
@@ -1074,11 +1083,11 @@ Techniques:
 
 ## 16. Security engineering and quality
 
-- `unsafe_code = "forbid"` in `[workspace.lints]`, inherited by every crate except the `ortu-py` FFI layer (M3), which opts out explicitly.
+- `unsafe_code = "forbid"` in `[workspace.lints]`, inherited by every crate, `ortu-py` included: PyO3's generated code compiles under it (ADR-0008).
 - Workspace Clippy policy: `all` and `pedantic` as warnings, plus `unwrap_used`, `expect_used`, `todo`, `dbg_macro`, `print_stdout` and `print_stderr` (allowed only in tests through `.clippy.toml`). The quality gate turns every warning into an error.
 - `cargo-deny` (`deny.toml`): license allowlist (MIT, Apache-2.0 with or without the LLVM exception, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib), OpenSSL banned, duplicate-version warnings, crates.io as the only allowed source.
 - `cargo-audit` in every run of the quality gate.
-- **Fuzzing (`cargo-fuzz`, in `fuzz/`):** targets `normalize`, `parse_spoken_number`, `iban_validate`, `redact_pipeline` and `rehydrate`. Invariants: no panics, no out-of-bounds offsets, word count preserved from input to output. Coverage-guided fuzzing needs Linux or macOS; on Windows, seeded randomized stress tests with the same generators and invariants run through `cargo xtask fuzz` (ADR-0005).
+- **Fuzzing (`cargo-fuzz`, in `fuzz/`):** targets `normalize`, `parse_spoken_number`, `iban_validate`, `redact_pipeline` and `rehydrate`. Invariants: no panics, no out-of-bounds offsets, word count preserved from input to output. Coverage-guided fuzzing needs Linux or macOS; on Windows, seeded randomized stress tests with the same generators and invariants run through `cargo xtask fuzz` (ADR-0005): normalization, detection, and sessions (Realtime, rehydration, the tool boundary and PostCall).
 - **Property-based tests (`proptest`):**
   - Every valid TCKN is detected regardless of reading style.
   - After redaction, no input PII value appears as a substring of the output.
@@ -1150,7 +1159,7 @@ ortu/
 ├── eval/baselines/            # Presidio comparison, Dockerfile                              M7
 ├── fuzz/                      # cargo-fuzz targets, own workspace, nightly (ADR-0005)        M1
 ├── benches/                                                                                  M7
-├── examples/                  # Rust, Python, CLI, voice agent with an LLM                   M3
+├── examples/                  # Python voice agent, run by `cargo xtask py`                  M3
 ├── docs/
 │   ├── systemdesign.md        # this document                                                M0
 │   ├── data-flow.md           # data inventory, trust zones, flows                           M0
@@ -1272,7 +1281,7 @@ Each entry records the context, the options considered, the decision and its con
 3. **Default token scope:** `call` (recommended, privacy) or `tenant` (analytics)?
 4. **Address granularity:** Keep province and district by default? (Recommended for municipal use: yes.)
 5. **Adopter-specific rules:** Institution dictionaries and custom detectors are written in the adopter's own code through the `Detector` trait. No adopter-specific code enters the ortu core.
-6. **LLM robustness of the token format:** Measure in M3 how often `[TCKN:7f3a9c2e]` is corrupted by different LLMs; change the format through an ADR if needed.
+6. **LLM robustness of the token format:** The tolerant matcher is in place (M3, algorithm 15). How often real LLMs corrupt `[TCKN:7f3a9c2e]` is measured in M7 with the evaluation harness; the format changes through an ADR if needed.
 7. **`ortu-server` protocol order:** gRPC or HTTP first? (Recommended: HTTP first, then gRPC.)
 8. **Nomadic `850` numbers:** the numbering plan lists them as location-independent numbers. They are mostly held by businesses but can be assigned to individuals; M2 does not treat them as personal. Decide with evidence from shadow mode.
 9. **Default policy for special categories:** `mask_sentence`, `persist_only` (the assistant sees the sentence; persisted copies are masked) or `flag`. Recommended default: `persist_only`. Decide with adopters in M4b.

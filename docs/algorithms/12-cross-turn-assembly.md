@@ -9,56 +9,57 @@ Join PII that is split across turns ("TC'm on iki üç yüz..." / agent: "evet" 
 | | |
 |---|---|
 | Pipeline stage | Assemble |
-| Crate | `ortu-stream` |
-| Modes | Realtime (eager) and PostCall (exact) |
+| Crate | `ortu-stream` (`session.rs` for Realtime, `postcall.rs` for PostCall); `ortu_tr::assemble` validates joined digits |
+| Modes | Realtime (eager, `Session::push`) and PostCall (exact, `Session::finish` and `Engine::redact`) |
 
 ## Data flow
 
 ```mermaid
 flowchart TD
-    subgraph Realtime["Realtime: every final turn"]
-        TURN(["Caller turn RAW<br/>sıfır sıfır yüz kırk altı"]) --> R1["Pipeline 01-10"]
-        R1 --> RC(["Candidates"])
-        ST[("SessionState<br/>OpenRun: 100000")] --> R2["Join with open run"]
+    subgraph Realtime["Realtime: Session::push, every final turn"]
+        TURN(["Caller turn RAW<br/>sıfır sıfır yüz kırk altı"]) --> R1["Pipeline 01-11<br/>with the session's expected kind"]
+        R1 --> RC(["Entities, lattices, cues"])
+        ST[("Phase<br/>Open: TCKN, 100000")] --> R2["Turn starts with digits?<br/>join with the open run"]
         RC --> R2
         R2 --> J(["Joined 10000000146"])
-        J --> R3["Validate"]
-        R3 -->|"pass"| R4["Issue full-value token<br/>state -> Idle"]
-        R3 -->|"not yet"| R5["Partial token<br/>extend open run"]
+        J --> R3["ortu_tr::assemble"]
+        R3 -->|"passed"| R4["Full-value token<br/>phase -> Idle"]
+        R3 -->|"needs more"| R5["[TCKN_INCOMPLETE:...]<br/>run stays open"]
         R4 & R5 --> OUT(["MASKED turn<br/>returned immediately"])
         R4 & R5 --> ST
-        TURN --> WS[("Word store<br/>all RAW turns of the call")]
+        R4 & R5 --> MAP[("Session map<br/>token -> value")]
+        TURN --> WS[("Stored turns<br/>RAW, this call")]
     end
-    subgraph PostCall["PostCall: finish()"]
-        WS --> P1["Rebuild runs across turns<br/>skip backchannels"]
-        P1 --> P2["Pipeline 03-11 over the whole call"]
-        P2 --> PR(["PostCallResult<br/>MASKED transcript, entities, audio regions"])
-        PR --> Z["Zeroize word store and session map"]
+    subgraph PostCall["PostCall: finish() or Engine::redact"]
+        WS --> P1["Group caller turns a number crosses<br/>skip backchannels"]
+        P1 --> P2["Pipeline 01-11 over each group as one turn"]
+        P2 --> PR(["PostCallResult<br/>MASKED turns, entities with parts"])
+        PR --> Z["Session dropped:<br/>map and stored turns zeroized"]
     end
 ```
 
 | From | Data | To |
 |---|---|---|
-| Adopter `push` | Final turns (RAW) | Realtime pipeline; session word store |
-| This step (Realtime) | Session state (phase, open run, last agent cues) | next `push` |
-| This step (Realtime) | Masked turn, `(token, value)` pairs | adopter (to LLM); session map (15) |
-| Session word store | All RAW turns | PostCall pass |
+| Adopter `push` | Final turns (RAW) | Realtime pipeline; stored turns |
+| This step (Realtime) | Phase (idle, expecting a kind, open run) | next `push` |
+| This step (Realtime) | Masked turn and entity reports; `(token, value)` pairs | adopter (to LLM); session map (15) |
+| Stored turns | All RAW turns | PostCall pass |
 | This step (PostCall) | `PostCallResult` | adopter (to persistent stores); 16 Audio |
 
 ## Session state
 
 ```rust
-struct SessionState {
-    phase: Phase,                         // Idle | Expecting(kind) | OpenRun(OpenRun)
-    last_agent_turn: Option<TurnCues>,    // PII question asked by the agent/bot
-    open_turns: u8,                       // turns since the run opened
+enum Phase {
+    Idle,
+    Expecting(EntityKind),        // the assistant asked for this kind
+    Open(OpenRun),                // the caller started a value
 }
 
 struct OpenRun {
-    kind_hint: Option<EntityKind>,        // from the cue that opened it
-    digits: SmallString<[u8; 32]>,
-    sources: Vec<WordRef>,                // across turns
-    partial_token: Option<Token>,         // issued in Realtime for the partial value
+    kind: EntityKind,             // TCKN, IBAN or phone
+    digits: Zeroizing<String>,    // digits so far, across turns
+    parts: Vec<WordSpan>,         // (turn, words) of every fragment
+    turns: u8,                    // caller turns the run spans
 }
 ```
 
@@ -67,93 +68,110 @@ struct OpenRun {
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
-    Idle --> Expecting: agent asks for PII
-    Idle --> OpenRun: caller starts a digit run with a cue
-    Expecting --> OpenRun: caller starts digits
-    Expecting --> Idle: caller answers without digits
-    OpenRun --> OpenRun: caller continues digits
-    OpenRun --> Commit: validator passes
-    OpenRun --> Commit: max_open_turns reached
-    OpenRun --> Commit: topic changes
-    Commit --> Idle
+    Idle --> Expecting: assistant asks for PII
+    Idle --> Open: caller ends a turn with digits after a cue
+    Expecting --> Open: caller ends the turn with unfinished digits
+    Expecting --> Idle: caller answers without them
+    Open --> Open: caller turn starts with digits, value still unfinished
+    Open --> Idle: value passes its validator
+    Open --> Idle: max_open_turns reached
+    Open --> Idle: caller turn starts with words (topic changed)
+    Open --> Idle: other assistant turn
+    Expecting --> Expecting: assistant backchannel
+    Open --> Open: assistant backchannel or the same question again
 ```
 
 ## Realtime algorithm (eager)
 
 ```
-push_realtime(turn):
-    cues = detect_cues(turn)
-    if turn.speaker is Agent/Bot:
-        state.last_agent_turn = cues
-        if cues ask for PII: state.phase = Expecting(kind)
-        return mask(turn)                                    # agent turns are masked too
+push(turn):
+    if turn.speaker is Agent or Bot:
+        analysis = analyze(turn)
+        if not backchannel(turn)                   # "evet", "hı hı", "devam edin"
+           and not (phase is Open(run) and analysis asked for run.kind):
+            phase = Expecting(kind) if analysis asked for a kind else Idle
+        return mask(turn, analysis)               # assistant turns are masked too
 
-    runs = digit_runs(turn)
-    if state.phase is OpenRun and runs.first starts at the turn start:
-        joined = state.open.digits + runs.first.digits       # continuation
-        if validates(joined, state.open.kind_hint):
-            token = issue_token(joined)                       # full value
-            emit turn with runs.first replaced by token
-            state.phase = Idle
-        else:
-            extend state.open; state.open_turns += 1
-            emit turn with runs.first masked as partial      # [TCKN_INCOMPLETE:...]
-    else:
-        handle runs as new candidates (Expecting boosts cue scores)
-
-    if state.open_turns >= max_open_turns or topic_changed(turn):
-        state.phase = Idle
-    return masked turn immediately                            # never held
+    expected = phase.kind                          # from Expecting or Open
+    analysis = analyze(turn, expected)             # the expected kind acts as a cue
+    if phase is Open(run) and turn.leading_lattice exists:      # first content word starts a number
+        for reading in lattice.readings:           # prefer the reading that completes the value
+            joined = run.digits + reading.digits
+            assembled = ortu_tr::assemble(run.kind, joined)
+        replace the analysis entities on those words with the assembled entity
+        if assembled.needs_more and run.turns + 1 < max_open_turns: keep the run open
+        else: phase = Idle
+    for every other lattice of the turn:           # unfinished values
+        kind = expected (TCKN, IBAN or phone), else the most specific kind with a cue
+        if kind and at least 2 digits and assemble(kind, best.digits).needs_more
+           and no validated entity covers the digits:
+            mask the digits as [KIND_INCOMPLETE:...]
+            if the lattice ends the turn: phase = Open(run)
+    return mask(turn, ...)                         # immediately, in the same call
 ```
+
+`ortu_tr::assemble` knows the lengths: 11 digits for a TCKN, 24 after `TR` for an IBAN, and 10, 11, 12 or 14 for a phone number depending on the prefix the caller started with (`5`, `0`, `90`, `00`). Digits past the length commit a valid prefix. An assembled value scores 1.0 when it passes its validator and 0.7 (the partial-match floor) while incomplete (ADR-0008).
 
 **Key property:** every turn is returned in the same call that received it. When a value completes in a later turn, the **completing turn** carries the token of the full value; earlier turns keep their partial tokens. The LLM uses the full-value token for tool calls.
 
 ## PostCall algorithm (exact)
 
 ```
-finish():
-    words = all caller words of the call, with global positions
-    lattices = build over runs, where runs may cross turn boundaries
-               if the gap between them is only agent backchannel ("evet", "hı hı", "tamam")
-               or fillers, and at most max_open_turns turns apart
-    candidates = detect + score over lattices (cross_turn = true where applicable)
-    resolve and transform as usual
-    return PostCallResult { transcript, entities, audio_regions }
+run(turns):
+    for each assistant turn: analyze alone; remember the kind it asked for unless it is a backchannel
+    group caller turns: turn B joins the group of turn A when
+        A ends with digits, B starts with digits,
+        only assistant backchannels or questions for an identifier lie between them,
+        and the group has fewer than max_open_turns caller turns
+    for each group: analyze the members as one joined turn, with the kind the assistant asked for
+    mask unfinished values as in Realtime (digits after a cue or question that do not complete a value)
+    map entities and masked words back to (turn, word) parts
+    transform every entity once; its replacement goes into every part
+    return PostCallResult { turns, entities }
 ```
 
-PostCall reprocesses everything from the session's in-memory word store; it does not reuse Realtime decisions.
+PostCall reprocesses the stored raw turns; it does not reuse Realtime decisions. It runs the same detectors, cues and validators on the joined group, so a value split over turns is found exactly as if it had been spoken in one. `Session::finish` and `Engine::redact` share this implementation.
 
 ## Worked example
 
 | Turn | Speaker | Text | Realtime output | Session phase after |
 |---|---|---|---|---|
-| 1 | Bot | TC kimlik numaranızı alabilir miyim? | unchanged | Expecting(Tckn) |
-| 2 | Caller | on sıfır sıfır sıfır sıfır | `[TCKN_INCOMPLETE:a1...]` | OpenRun (6 digits: `100000`) |
-| 3 | Bot | evet | unchanged | OpenRun |
-| 4 | Caller | sıfır sıfır yüz kırk altı | `[TCKN:7f...]` (full value `10000000146`) | Idle |
+| 0 | Bot | TC kimlik numaranızı alabilir miyim? | unchanged | Expecting(Tckn) |
+| 1 | Caller | on sıfır sıfır sıfır sıfır | `[TCKN_INCOMPLETE:...]` | Open (`100000`) |
+| 2 | Bot | evet | unchanged | Open |
+| 3 | Caller | sıfır sıfır yüz kırk altı | `[TCKN:...]` (full value `10000000146`) | Idle |
 
-PostCall output for the same call contains one `Tckn` entity spanning turns 2 and 4, with `cross_turn = true`.
+PostCall output for the same call contains one `Tckn` entity with parts in turns 1 and 3 and `cross_turn = true`; both turns read `[TCKN:...]` with the same token the LLM received in turn 3.
 
 ## Complexity
 
-Realtime: O(words in turn) plus O(1) state update. PostCall: the full pipeline over the call, once.
+Realtime: the pipeline over one turn plus O(1) state update. PostCall: the pipeline over the call, once; grouping is linear in the number of turns.
 
 ## Edge cases
 
-- **Bot speaks between fragments:** backchannels are skipped for assembly; substantive bot turns (a new question) close the run.
-- **Caller corrects across turns:** handled by correction markers ([02](02-filler-and-correction-marking.md)) on the joined sequence.
-- **Two different entities in a row:** if the joined sequence over-runs the expected length, the validator splits it: the first valid window is committed and the remainder opens a new run.
+- **Bot speaks between fragments:** backchannels and the same question again keep the run open; any other assistant turn (a new question) closes it.
+- **The caller never finishes the value:** the digits already said stay masked as `[KIND_INCOMPLETE:...]` in Realtime and in PostCall; nothing of them reaches a persistent store.
+- **Caller corrects across turns** (`yok yok, kırk altı`): Realtime joins the digits after the marker to the open run, so the value may not validate and stays masked as incomplete or invalid; PostCall applies the correction marker (algorithm 02) on the joined turn.
+- **Two different entities in a row:** if the joined digits run past the kind's length, a valid prefix is committed and the rest is masked with it.
+- **Topic change:** a caller turn that starts with words closes the run; digits at its end can open a new one.
 - **Partial STT results:** never pushed; only final turns are processed.
 
 ## Design rationale
 
 - **No hold-back:** see decision D7. A held turn is audible latency; eager partial masking keeps recall without waiting.
-- **Two passes instead of one adaptive pass:** the Realtime pass optimizes latency and recall; the PostCall pass optimizes accuracy for what gets stored. Trying to do both in one pass leads to either latency or wrong persisted data.
+- **Two passes instead of one adaptive pass:** the Realtime pass optimizes latency and recall; the PostCall pass optimizes accuracy for what gets stored.
 - **PostCall does not trust Realtime decisions:** it has strictly more information; reusing early decisions would carry over their false positives.
+- **Grouping turns instead of a second assembler:** joining the turns a number crosses lets the normal lattice, cues and validators do the work. A separate PostCall assembler would duplicate them and drift.
+- **No mode parameter:** `push` is Realtime and `finish` is PostCall, so no session can be created in a mode that cannot be used (ADR-0008).
 
 ## Tests and invariants
 
-- `push` never returns `Held`; the API has no such variant.
-- A TCKN split across 2 and 3 turns is detected in both modes.
+In `crates/ortu-stream/tests/session.rs`, `properties.rs` and `stress.rs`:
+
+- `push` has no `Held` result; every pushed turn is returned in the same call.
+- A TCKN split across 2 and 3 turns is assembled in Realtime and found as one entity in PostCall.
 - No raw digit of a split value appears in any Realtime output turn.
-- PostCall output equals batch `redact()` over the same transcript.
+- The same question asked again keeps the run open; another assistant turn, a topic change and `max_open_turns` close it.
+- A value that is never finished stays masked in both modes; an unfinished value inside a turn is masked without opening a run.
+- PostCall output (`finish`) equals batch `Engine::redact` over the same turns.
+- Stress (1,000,000 turns): every token in Realtime output resolves, and every reported part lies inside its turn.

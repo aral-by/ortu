@@ -97,6 +97,8 @@ flowchart LR
 
 **Dictionary rule:** every Turkish word list lives in `crates/ortu-normalize/src/lexicon.rs` and is written in folded form. A test folds every entry and fails if the result differs, so `IBAN`, `iban` and `İBAN` can never become separate entries (ADR-0004).
 
+**Written values:** `NormWord::written_value()` reads the value inside a word of written text, where values are glued to labels and separators: a label before the last `:` or `=` is dropped, and a leading `+` and hyphens are removed. It returns a value only if ASCII letters and digits remain. `TC:10000000146` gives `10000000146`, `+905321234567` gives `905321234567`, `0532-123-45-67` gives `05321234567`, and `IBAN:TR33-0006` gives `tr330006`. The lattice reads digit-only results as digit groups ([03](03-spoken-number-lattice.md)); the IBAN detector reads `tr` plus 24 digits as a written IBAN ([06](06-iban-validation.md)). Like every other view, it never changes the source (ADR-0008).
+
 **Lookup rule:** exact lookup on the folded stem first. The flattened `match_key` is consulted only when the word contains **no** Turkish-specific letter (`folded == match_key`), and a hit through it costs `FALLBACK_COST` in the lattice ([03](03-spoken-number-lattice.md)). This keeps `uc` (STT dropped the diacritics) readable as `üç` while `uç` ("tip") and `ön` ("front") are never read as numbers: a word written with Turkish letters was meant as written.
 
 ## Worked example
@@ -110,6 +112,8 @@ flowchart LR
 | `Üç` | `üç` | `uc` | none | yes, exact |
 | `uc` | `uc` | `uc` | none | yes, through the fallback |
 | `uç` | `uç` | `uc` | none | no: contains `ç` |
+| `TC:10000000146` | `tc:10000000146` | `tc:10000000146` | none | yes: written value `10000000146` |
+| `0532-123-45-67` | `0532-123-45-67` | `0532-123-45-67` | none | yes: written value `05321234567` |
 
 ## Complexity
 
@@ -135,4 +139,4 @@ O(n) in the number of bytes per word, plus one allocation each for `folded` and 
 - `match_key` is a function of `folded` only.
 - Every `NormWord.bytes` lies within the turn text (proptest), and slicing the turn text with it returns the raw word (unit test).
 - Every `lexicon.rs` entry is in folded form; keyed tables have no duplicate keys.
-- Unit tests for every row of the table above.
+- Unit tests for every row of the table above, and Text-channel end-to-end cases for written TCKNs, IBANs and phone numbers (`crates/ortu-tr/tests/text_channel.rs`).

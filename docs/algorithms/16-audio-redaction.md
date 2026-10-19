@@ -15,7 +15,7 @@ Cover every masked entity in the call recording with a beep, silence or noise, u
 
 ## Inputs and outputs
 
-- Input: `PostCallResult.audio_regions` (derived from masked spans), the recording (PCM), channel layout, `TimingQuality`.
+- Input: the entity parts of `PostCallResult` (turn and word ranges of every masked span), the recording (PCM), channel layout, `TimingQuality`.
 - Output: the redacted recording (WAV or Opus) and region statistics.
 
 ## Data flow

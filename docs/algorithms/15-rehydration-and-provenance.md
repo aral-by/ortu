@@ -9,7 +9,7 @@ Let an LLM work with tokens while the systems around it still get real values wh
 | | |
 |---|---|
 | Pipeline stage | LLM loop (after Transform) |
-| Crate | `ortu-stream` |
+| Crate | `ortu-stream` (`matcher.rs`, `map.rs`, `tools.rs`, `rehydrate.rs`) |
 | Modes | Realtime |
 
 ## Data flow
@@ -75,43 +75,54 @@ Every arrow into the LLM carries tokens only; every arrow out of the LLM toward 
 
 ### Tolerant token matching
 
-LLMs corrupt tokens: they drop brackets, change case, insert spaces or put the token inside quotes. The matcher accepts these forms but requires the kind label and the full hex part:
+LLMs corrupt tokens: they drop brackets, change case, insert spaces or put the token inside quotes. The matcher accepts these forms but requires a known label and the full digest. The grammar is bounded and ASCII-only (ADR-0008):
 
 ```
-(?i) \[? \s* (TCKN|VKN|IBAN|PHONE|NAME|EMAIL|ADDRESS|PLATE|...)
-     (?: _(INCOMPLETE|INVALID) )? \s* [:：]? \s*
-     ([0-9a-f]{8}|[0-9a-f]{16}) \s* \]?
+( "[" WS{0,3} )? LABEL ( "_INCOMPLETE" | "_INVALID" )? WS{0,3} ( ":" | "：" )?
+WS{0,3} ( HEX{16} | HEX{8} ) ( WS{0,3} "]" )?
+
+LABEL: TCKN | VKN | IBAN | PHONE | CARD | EMAIL | NAME | ADDRESS | PLATE | BIRTHDATE | PASSPORT
+       (and the labels of adopter kinds), ASCII case-insensitive; WS: space or tab
 ```
+
+Without its opening bracket, a token must not follow a letter, digit or underscore (`USERNAME:55832c68` is not a `NAME` token); without its closing bracket, it must not be followed by one (`TCKN:df1c492e5` is not a token). Unicode case folding is excluded: it would let `K` (Kelvin sign) match `K`.
 
 Resolution:
 
 ```
 resolve(match):
-    entry = session.map.get(kind, hex)          # constant-time comparison
-    if entry exists: return entry.value
-    else:            return Err(GuardError::UnknownToken)   # never pass through, never guess
+    slot = session.map.get(label, digest)       # keyed by label and digest
+    One(entry)  -> entry.value
+    Ambiguous   -> Err(GuardError::AmbiguousToken)   # two values share the token
+    missing     -> Err(GuardError::UnknownToken)     # never pass through, never guess
 ```
 
-A token whose hex part was altered by one character does **not** match a neighbor; it fails. This is what guarantees that rehydration never returns a wrong value.
+A token whose digest was altered by one character does **not** match a neighbor; it fails. This is what guarantees that rehydration never returns a wrong value. Digests are not secrets (the LLM holds every token it can present), so the lookup needs no constant-time comparison.
 
 ### Provenance check on tool arguments
 
 ```
 guard_tool_args(tool, args):
-    out = deep copy of args
-    for each string leaf s in out:
+    out = copy of args
+    for each string or number leaf s in out, with the field name f above it:
         # 1. Replace tokens.
         for m in token_matches(s):
-            replace m with resolve(m)?                      # ? propagates GuardError
-            if m.marker in {INCOMPLETE, INVALID} and not tool.allows_invalid(m.kind):
+            entry = resolve(m)?                             # ? propagates GuardError
+            if entry is incomplete or invalid and not accepts_invalid(tool, entry.kind):
                 return Err(GuardError::InvalidValue)
+            replace m with entry.value
         # 2. Look for raw PII that did not come from a token.
-        for c in detect(original_leaf_without_tokens, channel = Text):
-            if c.score >= mask_threshold:
-                return Err(GuardError::UnknownValue { kind: c.kind })
-    audit(ToolArgsReleased { tool, kinds })
+        hint = field_kind(f) if it is an identifier kind (`tckn`, `phoneNumber`, `iban`)
+        for e in analyze(s with the tokens removed, expecting = hint):
+            if e.score >= mask_threshold:
+                return Err(GuardError::UnknownValue { kind: e.kind })
+    audit(ToolArgsReleased { tool, kinds })?                # no audit, no release
     return out
 ```
+
+Every rejection is audited too (`tool_call_rejected` with its reason); a sink failure there does not hide the reason. JSON numbers are checked like strings: `{"tckn": 10000000164}` is rejected.
+
+`mask_tool_result` walks the result the same way and masks what it finds, with the field name as a cue for every kind: `{"name": "Ahmet Yılmaz"}` is read like an answer to "adınız?", so the name is masked without an introducer. `register` canonicalizes the value first (digits, E.164, compact IBAN), so a registered caller ID and the same number spoken later share one token.
 
 Why step 2 is a hard rejection: the LLM only ever saw tokens. Caller speech, context values and tool results all enter the LLM through `push`, `register` or `mask_tool_result`. A raw TCKN in a tool argument can therefore only be a value the LLM produced itself, by invention or by corrupting a token it misread. Releasing it could query another person's record.
 
@@ -135,34 +146,33 @@ sequenceDiagram
 ```
 Rehydrator.feed(chunk):
     buf += chunk
-    k = earliest index in buf where a token match could still begin
-        (a '[' or a prefix of a kind label, case-insensitive)
-    if no such index: emit(buf); buf = ""; return
-    emit(rehydrate(buf[..k])); buf = buf[k..]
-    if buf contains a complete match: emit(rehydrate(match)); buf = rest
-    if len(buf) > MAX_TOKEN_LEN + TOLERANCE: emit(buf[..1]); buf = buf[1..]   # not a token after all
+    k = earliest index in the last MAX_TOKEN_LEN bytes of buf
+        from which buf[k..] could still grow into a token (or a longer one)
+    ready = buf[..k]; buf = buf[k..]
+    emit(rehydrate(ready, before = last released char, after = first char of buf))
 
 Rehydrator.finish():
-    emit(rehydrate(buf))
+    emit(rehydrate(buf, before = last released char, after = none))
 ```
 
-Only a possible token prefix is ever buffered (at most about 30 characters); all other text passes through immediately, so TTS latency is unaffected.
+"Could still grow" is decided exactly by walking the bounded grammar: `[TCK`, `TCKN:` and `TCKN:df1c492e` can; `[TCKN:df1c492e]` and `TCKN:df1c492e.` cannot. Only such a suffix is ever buffered (at most one token length); all other text passes through immediately, so TTS latency is unaffected. The characters around each released piece go to the matcher, so the boundary rules give the same answer as on the whole text. `RehydrateStream` holds the buffer without borrowing the session, for bindings.
 
 ### Read-back policy
 
 | Kind | Default read-back |
 |---|---|
-| `Tckn`, `CreditCard` | Partially masked (`*******0146`), never the full value |
-| `Phone` | Partially masked |
-| `PersonName`, `FullName` | Full value (the agent addresses the caller by name) |
+| `PersonName`, `PersonSurname`, `FullName` | Full value (the agent addresses the caller by name) |
 | `Address` | Full value |
-| Others | Configurable per tenant |
+| Every other kind (`Tckn`, `CreditCard`, `Phone`, `Iban`, ...) | Partially masked (`*******0146`) |
+
+`EngineBuilder::read_back(kind, ReadBack::Full)` overrides a kind. Names are stored with their source spelling (`Ahmet Yılmaz`); their token is computed over the folded form.
 
 ## Lifecycle of the session map
 
-- Created with the session; holds `(kind, hex) -> SecretValue`.
+- Created with the session; holds `(label, digest) -> (kind, SecretValue, validator outcome)`. Two different values under one key make it ambiguous.
+- Written by `push` (token transforms only), `register` and `mask_tool_result`; read by `guard_tool_args` and `rehydrate`.
 - Never serialized, logged or written to a shared store.
-- Zeroized on `finish()` or `drop`. Deployments disable core dumps; `mlock` is recommended.
+- Zeroized when the session is dropped, which `finish()` does. Deployments disable core dumps; `mlock` is recommended.
 
 ## Complexity
 
@@ -183,7 +193,10 @@ Token matching is a single linear-time regex pass; map lookups are O(1). `guard_
 
 ## Tests and invariants
 
-- Proptest: randomly corrupted tokens either resolve to the correct value or fail; never to another value.
+In `crates/ortu-stream/tests/`:
+
+- Proptest: randomly corrupted tokens (case, brackets, spaces, one altered digest digit) either resolve to the correct value or fail; never to another value.
 - Proptest: any valid TCKN, IBAN or phone number not in the map is rejected in tool arguments.
-- Proptest: streaming rehydration over random chunk boundaries equals non-streaming rehydration.
-- Every guard decision emits an audit event (`tool_call_rejected` or `tool_args_released`) without raw values.
+- Proptest: streaming rehydration over random chunk boundaries equals non-streaming rehydration, including unknown tokens, unbracketed tokens and letters glued to them. This property found a defect during M3: a token at the end of a released piece was judged without the character that followed it in the buffer.
+- Every guard decision emits an audit event (`tool_call_rejected` or `tool_args_released`) without raw values; releasing fails when the sink fails.
+- Fuzz targets `rehydrate` and `redact_pipeline`; on Windows, the session stress test of `cargo xtask fuzz`.

@@ -159,10 +159,10 @@ flowchart LR
 | D9 | LLM response text | TOKEN | LLM via adopter | TTS / chat (policy) | `rehydrate`, `Rehydrator` | One response | No |
 | D10 | PostCall transcript | MASKED | `finish` | Persistent stores | `finish` return | Adopter retention policy | No (adopter stores it) |
 | D11 | Entity reports | META | `push`, `finish` | Review UI, analytics | return values | Adopter retention policy | No |
-| D12 | Audio regions | META | `finish` | Audio redaction | `finish` return | One job | No |
+| D12 | Audio regions | META | Entity parts of `finish` | Audio redaction | derived in M6 | One job | No |
 | D13 | Recording | RAW audio in, redacted out | Recording store | Recording store | `audio/redact` | Adopter retention policy | No |
 | D14 | Vault records | CIPHER | Encrypt transform | Vault store | `VaultStore::put` | Until shred or key destruction | Yes (through `VaultStore`) |
-| D15 | Audit events | META | Every mask, reveal, shred, guard decision | Audit sink | `AuditSink::record` | Adopter audit retention | Yes (through `AuditSink`) |
+| D15 | Audit events | META | Guard decisions (M3); mask, reveal and shred with the vault (M5) | Audit sink | `AuditSink::record` | Adopter audit retention | Yes (through `AuditSink`) |
 | D16 | Metrics | META | All stages | Prometheus | `/metrics` | Scrape interval | No |
 | D17 | Token key `K_tenant` | Key | KeyProvider | Tokenizer | `KeyProvider::token_key` | In memory, zeroized on drop | No |
 | D18 | DEK | Key (wrapped at rest) | KMS | Encrypt / reveal | `KeyProvider::data_key` | Short cache TTL, zeroized | No |
@@ -184,7 +184,7 @@ sequenceDiagram
     participant P as Persistent store
     participant R as Recording job
 
-    A->>S: session(call_id, Realtime)
+    A->>S: session(call_id, tenant_id)
     A->>S: register(Phone, caller_id)
     S-->>A: [PHONE:4e1a9c07] (for the system prompt)
     STT->>A: final turn (RAW)
@@ -205,7 +205,7 @@ sequenceDiagram
     A->>TTS: text
     Note over A,S: call ends
     A->>S: finish()
-    S-->>A: PostCall MASKED transcript, entities, audio regions
+    S-->>A: PostCall MASKED turns, entities (parts for audio regions)
     A->>P: store MASKED transcript and META
     A->>R: audio regions
     R->>R: redact recording (16)
@@ -243,3 +243,5 @@ flowchart TD
 4. Persist only `finish()` output, never `push()` output.
 5. Call `finish()` on every exit path, including errors and hang-ups.
 6. Disable core dumps in the process that hosts sessions.
+7. Push the assistant's turns too, as spoken (after read-back): its questions tell ortu what the caller's next turn holds, and its read-back belongs in the persistent transcript, masked.
+8. Written input (chat messages, forms) goes through the same session; the Text channel is a first-class input.

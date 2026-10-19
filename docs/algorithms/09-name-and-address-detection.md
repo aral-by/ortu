@@ -43,7 +43,7 @@ flowchart LR
 
 ## Person names
 
-**M2 scope:** only the first layer runs: introducers (`adım`, `ismim`, `soyadım`, `adım soyadım`), honorifics (`Ahmet Bey`), and the caller's answer of at most four words after an assistant asks for a name. `ben X`, gazetteers and capitalization arrive in M4; without a gazetteer, `ben belediyeden arıyorum` would mask `belediyeden`. A name skips leading fillers (`adım ııı Barış`) and stops at punctuation in the source (`ismim Can, borcumu ...`). Words in `NOT_NAMES` (function words, titles such as `müdür`) and finite verbs (`-yor`, `-acağım`, ...) are never names. The lists live in `crates/ortu-tr/src/data.rs`.
+**M2 scope:** only the first layer runs: introducers (`adım`, `ismim`, `soyadım`, `adım soyadım`), the form of address `Sayın` (M3, ADR-0008: assistants read names back as `Sayın Ahmet Yılmaz`), honorifics (`Ahmet Bey`), and the caller's answer of at most four words after an assistant asks for a name. `ben X`, gazetteers and capitalization arrive in M4; without a gazetteer, `ben belediyeden arıyorum` would mask `belediyeden`. A name skips leading fillers (`adım ııı Barış`) and stops at punctuation in the source (`ismim Can, borcumu ...`). Words in `NOT_NAMES` (function words, titles such as `müdür`) and finite verbs (`-yor`, `-acağım`, ...) are never names. The lists live in `crates/ortu-tr/src/data.rs`.
 
 ### Three layers
 

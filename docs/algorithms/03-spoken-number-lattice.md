@@ -11,7 +11,7 @@ Turn spoken Turkish numbers into digit strings. Spoken numbers are ambiguous: *"
 | Pipeline stage | Normalize (last step) |
 | Crate | `ortu-normalize` (`number.rs`; number words in `lexicon.rs`) |
 | Modes | Realtime and PostCall |
-| Channels | Speech (Text: digit tokens and written-out numbers) |
+| Channels | Speech and Text: number words, digit tokens, and digits inside written words (`TC:10000000146`, `0532-123-45-67`; [01](01-text-canonicalization.md)) |
 
 ## Inputs and outputs
 

@@ -66,6 +66,14 @@ The remainder is computed digit by digit, so no big-integer type is needed and t
 ### Detection
 
 ```
+detect_written(words):                               # Text channel
+    for word in words:
+        v = written_value(word)                      # "IBAN:TR33-0006-..." -> "tr330006..."
+        if v == "tr" + 24 digits:
+            candidate = "TR" + digits
+            emit Candidate(candidate, validate(candidate),
+                           floor = 0.7 unless it passed)  # the shape alone is strong evidence
+
 detect_iban(lattice, letters, cues):
     for reading in lattice.readings:
         if spelled "TR" precedes the run and len(reading) == 24:
@@ -125,7 +133,8 @@ O(26) per candidate; at most R = 8 readings per run.
 
 - **Partial reads:** callers often stop after the first few groups and continue later; cross-turn assembly ([12](12-cross-turn-assembly.md)) joins the pieces.
 - **Overlapping TCKN windows:** a 24-digit IBAN body can contain an 11-digit window that passes the TCKN checksum. IBAN wins on specificity ([11](11-conflict-resolution.md)).
-- **Spaces and groups in text:** the Text channel removes spaces and normalizes case before validation; the span covers the original spacing.
+- **Spaces and groups in text:** `TR33 0006 1005 ...` is read like speech (prefix plus digit groups); `TR330006100519786457841326`, `tr33...` and `TR33-0006-...` are read as one written word. The span covers the original spacing.
+- **A written IBAN with a wrong check digit** (`TR340006...`) is masked as `_INVALID`: nothing else has that shape, and a typo does not make it less personal.
 
 ## Design rationale
 
@@ -136,6 +145,7 @@ O(26) per candidate; at most R = 8 readings per run.
 
 - The SWIFT IBAN registry example (`TR33 0006 1005 1978 6457 8413 26`) and 20 IBANs generated independently in Python (real bank codes, computed check digits) validate, written with `TR33` attached, after `te re`, after a bare `TR` or after a cue (`crates/ortu-tr/tests/kinds.rs`).
 - A wrong check digit after a cue is masked as `_INVALID`; a body without `TR` and without a cue is not claimed.
+- Written forms (`TR330006100519786457841326`, `IBAN:TR33...`, `hesap: TR33-0006-...`, with a suffix) are found, and a written IBAN with a wrong check digit is masked as `_INVALID` (`crates/ortu-tr/tests/text_channel.rs`).
 - Fuzz target `iban_validate` and the analyzer stress test cover arbitrary input.
 - Any single-character substitution or adjacent transposition fails (a known property of mod-97).
 - Spoken readings with and without `te re` produce the same candidate.

@@ -12,7 +12,7 @@ Thank you for considering a contribution. This document describes how the projec
 
 - Install [rustup](https://rustup.rs). The toolchain pinned in `rust-toolchain.toml` (with `rustfmt` and `clippy`) is installed on first use.
 - On Windows with the MSVC toolchain, install the Visual Studio C++ build tools and a Windows SDK.
-- Tools used by the quality gate: `cargo install --locked cargo-deny cargo-audit`.
+- Tools used by the quality gate: `cargo install --locked cargo-deny cargo-audit`, and Python 3.9 or newer on `PATH` (the `py` step creates `.venv` and installs maturin itself).
 
 ## Quality gate
 
@@ -22,7 +22,7 @@ The project has no hosted CI (ADR-0003). Instead, every commit must pass one com
 cargo xtask check
 ```
 
-It runs, in order and with the exact flags shown in its output: rustfmt, Clippy with warnings as errors, the test suite, the MSRV 1.85 build, cargo-deny and cargo-audit. Every step runs even if an earlier one fails, and a summary lists the result of each. Run a subset with `cargo xtask check clippy test`.
+It runs, in order and with the exact flags shown in its output: rustfmt, Clippy with warnings as errors, the test suite, the MSRV 1.85 build, cargo-deny, cargo-audit, and `py`: the Python extension built with maturin, its tests and the voice-agent example (also available alone as `cargo xtask py`). Every step runs even if an earlier one fails, and a summary lists the result of each. Run a subset with `cargo xtask check clippy test`.
 
 Paste the summary into your pull request description. Changes that touch platform-specific behavior should state which operating systems the gate was run on.
 
@@ -37,7 +37,7 @@ Paste the summary into your pull request description. Changes that touch platfor
 ## Fuzzing and stress tests
 
 - `cargo xtask fuzz [ITERATIONS]` runs the seeded randomized stress tests (default 1,000,000 iterations; `ORTU_STRESS_SEED` reproduces a failure). It works on every platform.
-- On Linux or macOS, coverage-guided fuzzing is available as well: `cargo +nightly fuzz run <target>` with `normalize`, `parse_spoken_number` or `iban_validate`. It does not link on Windows with MSVC (ADR-0005).
+- On Linux or macOS, coverage-guided fuzzing is available as well: `cargo +nightly fuzz run <target>` with `normalize`, `parse_spoken_number`, `iban_validate`, `rehydrate` or `redact_pipeline`. It does not link on Windows with MSVC (ADR-0005).
 
 ## Commits and pull requests
 
