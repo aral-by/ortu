@@ -137,7 +137,7 @@ flowchart LR
 |---|---|
 | RAW into Zone 2 (LLM) | All inputs to the LLM pass `push`, `register` or `mask_tool_result` |
 | Realtime output into Zone 3 | `RealtimeOutput` has no persistence conversion; only `PostCallResult` implements the persistence traits |
-| RAW into logs, metrics, audit | `SecretValue` has no `Display`/`Serialize`; CI log-leak test (design document §12) |
+| RAW into logs, metrics, audit | `SecretValue` has no `Display`/`Serialize`; log-leak test in the test suite (design document §12) |
 | Session map to disk or network | The map type implements neither `Serialize` nor `Clone` |
 | Unknown or invented value into Zone 5 | Provenance check in `guard_tool_args` ([15](algorithms/15-rehydration-and-provenance.md)) |
 | KEK out of Zone 4 | ortu only ever calls wrap/unwrap; it never requests key export |

@@ -12,21 +12,19 @@ Thank you for considering a contribution. This document describes how the projec
 
 - Install [rustup](https://rustup.rs). The toolchain pinned in `rust-toolchain.toml` (with `rustfmt` and `clippy`) is installed on first use.
 - On Windows with the MSVC toolchain, install the Visual Studio C++ build tools and a Windows SDK.
-- Optional tools used by CI: `cargo install --locked cargo-deny cargo-audit`.
+- Tools used by the quality gate: `cargo install --locked cargo-deny cargo-audit`.
 
-## Checks
+## Quality gate
 
-Every pull request must pass the same checks CI runs:
+The project has no hosted CI (ADR-0003). Instead, every commit must pass one command:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo deny check
-cargo audit
+cargo xtask check
 ```
 
-The MSRV job additionally runs `cargo +1.85 check --workspace --all-targets`.
+It runs, in order and with the exact flags shown in its output: rustfmt, Clippy with warnings as errors, the test suite, the MSRV 1.85 build, cargo-deny and cargo-audit. Every step runs even if an earlier one fails, and a summary lists the result of each. Run a subset with `cargo xtask check clippy test`.
+
+Paste the summary into your pull request description. Changes that touch platform-specific behavior should state which operating systems the gate was run on.
 
 ## Code conventions
 

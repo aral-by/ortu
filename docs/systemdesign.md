@@ -18,7 +18,7 @@ This document is the **single source of truth** for the project. Implementers fo
 
 1. Milestones (§17) are implemented **in order**. A milestone is not started until the acceptance criteria of the previous one are met.
 2. Trait names, type names and behaviors defined here are preserved. Any deviation requires an ADR (Architecture Decision Record) under `docs/adr/`.
-3. At the end of every milestone, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` and `cargo deny check` must pass.
+3. Every commit on `main` passes the quality gate, `cargo xtask check`: rustfmt, Clippy with warnings as errors, tests, the MSRV build, cargo-deny and cargo-audit (ADR-0003).
 4. **Real personal data never enters the repository.** All test and evaluation data is synthetic (§14).
 5. When something is ambiguous, check the open questions in §20. If the answer is not there, implement the safest option (recall-first, fail-closed) and record it in an ADR.
 6. **This document and the repository are public.** No adopter's (including Belzeka's) internal architecture, security findings, customer information or proprietary code goes here. Adopter-specific integration notes live in the adopter's own repository.
@@ -223,7 +223,7 @@ Rule: the Python binding and the server only wrap the core. Detection, normaliza
 | `ortu-ner` (optional) | ONNX-based NER behind a feature flag | `ortu-core` | v1.1 |
 | `ortu-server` | HTTP + gRPC service (`axum` + `tonic`), session management, health and metrics | every library crate | M10 |
 
-Crates are created by the milestone in the last column, together with their first real content. M0 creates the eight crates that form the dependency graph of the engine, so that layering mistakes fail to compile from day one.
+Crates are created by the milestone in the last column, together with their first real content. M0 creates the eight crates that form the dependency graph of the engine, so that layering mistakes fail to compile from day one. The workspace also contains `xtask`, the development-only quality gate (ADR-0003); it is not part of the engine and is never published.
 
 **Rule:** `ortu-core` and `ortu-normalize` perform no I/O, hold no global state and consist of pure functions. `unsafe_code` is forbidden workspace-wide through `[workspace.lints]` (§16).
 
@@ -866,7 +866,7 @@ STT timestamps can drift by 100 to 300 ms. The padding values are measured and c
 
 ## 12. Observability and audit
 
-- Structured logging with `tracing`. **No log field ever contains a raw value.** This is guaranteed by the type system (§5.4) and by a dedicated CI test: the full pipeline runs on synthetic PII, the captured log output is searched for the raw values, and the test **fails** if any is found.
+- Structured logging with `tracing`. **No log field ever contains a raw value.** This is guaranteed by the type system (§5.4) and by a dedicated test in the workspace test suite: the full pipeline runs on synthetic PII, the captured log output is searched for the raw values, and the test **fails** if any is found.
 - Audit event (`AuditEvent`): `call_id`, `tenant_id`, `entity_kind`, `token`, `detector`, `score`, `action` (`masked | revealed | shredded | tool_call_rejected | tool_args_released`), `actor`, `ts`. No raw values.
 - Audit events are delivered through the `AuditSink` trait, implemented by the adopter (database, log pipeline, SIEM). `reveal` fails if the sink cannot record the event (fail-closed).
 - Metrics (the `metrics` crate, Prometheus-compatible):
@@ -934,7 +934,7 @@ post = session.finish()                                      # persistent transc
 
 - The binding is a thin wrapper; all logic lives in the Rust core (§4.3).
 - The GIL is released during heavy work (`py.allow_threads`).
-- `abi3` wheels (Python 3.9+) for manylinux, macOS and Windows are built in CI.
+- `abi3` wheels (Python 3.9+) for manylinux, macOS and Windows; how they are built without hosted CI is decided in M9 (ADR-0003).
 - Framework integrations (LiveKit Agents, Pipecat and similar) are out of scope; adopters build them on top of this API (§21).
 
 ### 13.4 Server (`ortu-server`, v1.x)
@@ -1006,16 +1006,16 @@ Techniques:
 - `aho-corasick` (DFA) for gazetteers and cues, built once at compile time or startup.
 - Minimal allocation on the hot path: `SmallVec`, `&str` spans, reused buffers.
 - In batch mode, detectors run in parallel per turn with `rayon`; streaming mode runs deterministically on a single thread.
-- Benchmarks with `criterion`; CI warns on regressions above 10%.
+- Benchmarks with `criterion`; benchmark runs compare against the stored baseline and flag regressions above 10%.
 
 ---
 
 ## 16. Security engineering and quality
 
 - `unsafe_code = "forbid"` in `[workspace.lints]`, inherited by every crate except the `ortu-py` FFI layer (M3), which opts out explicitly.
-- Workspace Clippy policy: `all` and `pedantic` as warnings, plus `unwrap_used`, `expect_used`, `todo`, `dbg_macro`, `print_stdout` and `print_stderr` (allowed only in tests through `.clippy.toml`). CI turns every warning into an error.
+- Workspace Clippy policy: `all` and `pedantic` as warnings, plus `unwrap_used`, `expect_used`, `todo`, `dbg_macro`, `print_stdout` and `print_stderr` (allowed only in tests through `.clippy.toml`). The quality gate turns every warning into an error.
 - `cargo-deny` (`deny.toml`): license allowlist (MIT, Apache-2.0 with or without the LLVM exception, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib), OpenSSL banned, duplicate-version warnings, crates.io as the only allowed source.
-- `cargo-audit` on every CI run.
+- `cargo-audit` in every run of the quality gate.
 - **Fuzzing (`cargo-fuzz`):** targets `normalize`, `parse_spoken_number`, `iban_validate`, `redact_pipeline` and `rehydrate`. Invariants: no panics, no out-of-bounds offsets, word count preserved from input to output.
 - **Property-based tests (`proptest`):**
   - Every valid TCKN is detected regardless of reading style.
@@ -1028,7 +1028,7 @@ Techniques:
 - **Snapshot tests (`insta`):** normalization lattices and redaction output.
 - **Leak test:** the log-scanning test from §12.
 - **Release security:** SBOM (CycloneDX), signed releases (cosign / GitHub attestations), and a responsible disclosure process in `SECURITY.md`.
-- Edition 2024; MSRV: Rust 1.85, tested in CI (ADR-0001). The development toolchain is pinned in `rust-toolchain.toml` and bumped in dedicated commits.
+- Edition 2024; MSRV: Rust 1.85, checked by the quality gate (ADR-0001). The development toolchain is pinned in `rust-toolchain.toml` and bumped in dedicated commits.
 
 ---
 
@@ -1036,7 +1036,7 @@ Techniques:
 
 | # | Milestone | Scope | Acceptance criteria |
 |---|---|---|---|
-| **M0** | Skeleton | Workspace with the eight M0 crates (§4.4), CI (fmt, clippy, test, MSRV, deny, audit), licenses, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, ADR template | CI green; `cargo run -p ortu-cli -- --help` works |
+| **M0** | Skeleton | Workspace with the eight M0 crates (§4.4), quality gate `cargo xtask check` (fmt, clippy, test, MSRV, deny, audit), licenses, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, ADR template | `cargo xtask check` passes; `cargo run -p ortu-cli -- --help` works |
 | **M1** | Normalization | Turkish case folding, filler and interruption marking, spoken number parser with lattice and offset map, spelled-out input | Every example in the §6.3 table is covered by a snapshot test; no panic in 1M fuzz iterations; offset proptest passes |
 | **M2** | Core detectors and scoring | TCKN, phone, IBAN, person name (cue-based); cue system; baseline §8 (hand-set weights, conflict resolution, policy); `ortu.toml`; `Token` (HMAC, call scope) | Official test vectors pass for every validator; at least 20 positive and 20 negative unit tests per kind; conflict-resolution proptests |
 | **M3** | Session and LLM loop | Realtime/PostCall modes, cross-turn assembly, session map, `rehydrate`, streaming `Rehydrator`, `guard_tool_args` (provenance check), basic `ortu-py` API | Agent question then caller answer scenario; TCKN split across 3 turns; zero hold-back in Realtime; the rehydration and provenance proptests from §16; end-to-end example from Python |
@@ -1044,7 +1044,7 @@ Techniques:
 | **M4** | Remaining detectors | VKN, card (with CVV and expiry), email, plate, birth date, passport, address (rule-based), name gazetteer; Text channel defaults | M2 test criteria for every new kind; Text channel tests |
 | **M5** | Transforms and cryptography | `Redact`/`Mask`/`Encrypt`, vault traits, SQLite and in-memory vaults, reveal with audit, shred | Round-trip proptest; tampering with AAD makes decryption fail; log leak test green |
 | **M6** | Audio | Span to time, padding, merging, tone and silence, crossfade, channel selection | Region accuracy within one sample on synthetic WAV; no click at crossfades (spectral test); 200x real time |
-| **M7** | Evaluation and benchmarks | Synthetic generator, metrics, LLM robustness measurement, Presidio baseline, calibration, report generation | `make eval` produces the report in one command; TCKN/IBAN/phone recall >= 0.98; leak rate reported; benchmark results in the README |
+| **M7** | Evaluation and benchmarks | Synthetic generator, metrics, LLM robustness measurement, Presidio baseline, calibration, report generation | `cargo xtask eval` produces the report in one command; TCKN/IBAN/phone recall >= 0.98; leak rate reported; benchmark results in the README |
 | **M8** | CLI and packaging | All CLI commands, STT format adapters, wheels | The example notebook runs after `pip install ortu`; every CLI command is covered by an integration test |
 | **M9** | Release | Documentation site (mdBook), README, examples, SBOM, signed v1.0.0, crates.io and PyPI | The README's "get started in 5 minutes" steps work on a clean machine |
 | **M10** | `ortu-server` | HTTP and gRPC service, session management, Docker image (§13.4) | The Python API's integration tests pass against the server; load-test report |
@@ -1064,6 +1064,7 @@ ortu/
 ├── deny.toml                  # cargo-deny policy (§16)                                      M0
 ├── .clippy.toml               # Clippy MSRV and test exemptions                              M0
 ├── .rustfmt.toml              # formatting                                                   M0
+├── .cargo/config.toml         # `cargo xtask` alias                                          M0
 ├── .editorconfig, .gitattributes, .gitignore                                                 M0
 ├── crates/                    # one directory per crate, created as listed in §4.4
 │   ├── ortu-core/
@@ -1077,6 +1078,7 @@ ortu/
 │   ├── ortu-eval/
 │   ├── ortu-py/                                                                              M3
 │   └── ortu-server/                                                                          M10
+├── xtask/                     # quality gate: `cargo xtask check` (ADR-0003)               M0
 ├── config/
 │   ├── ortu.example.toml                                                                     M2
 │   └── weights.toml                                                                          M2
@@ -1095,8 +1097,7 @@ ortu/
 │   └── calibration.md                                                                        M7
 ├── reports/                                                                                  M7
 ├── .github/
-│   ├── workflows/             # ci.yml (M0), fuzz-nightly.yml (M1), eval.yml (M7), release.yml (M9)
-│   └── dependabot.yml                                                                        M0
+│   └── dependabot.yml         # dependency update proposals, verified with the quality gate   M0
 ├── LICENSE-MIT                                                                               M0
 ├── LICENSE-APACHE                                                                            M0
 ├── NOTICE                     # attribution: "A Belzeka tool", copyright                     M0
@@ -1119,7 +1120,7 @@ Each entry records the context, the options considered, the decision and its con
 - **Options:** Python (closest to the Presidio ecosystem), Go, Rust.
 - **Decision:** Rust core; Python and the server only wrap it.
 - **Why:** The p99 budget of 5 ms per utterance leaves no room for GC pauses. The type system lets us make raw values unprintable at compile time (§5.4), and `zeroize` gives us control over secret lifetimes that a garbage-collected runtime does not. The `regex` crate guarantees linear-time matching. One core means the CLI, the Python package and the server can never disagree on a detection.
-- **Consequences:** Higher contributor onboarding cost; PyO3 and maturin add build complexity to CI.
+- **Consequences:** Higher contributor onboarding cost; PyO3 and maturin add build complexity to the build and release process.
 
 ### D2. Embedded library for the realtime loop, server for everything else
 
@@ -1254,8 +1255,8 @@ The README states "used in production" only after an adopter has completed shado
 - [ ] The first screen of the README shows a before/after transcript and a beeped audio demo (synthetic)
 - [ ] `ortu eval` table: per-kind recall and precision, leak rate, Presidio comparison
 - [ ] Benchmark table with hardware details
-- [ ] A "reproduce" section: `git clone && make eval` yields the same numbers
+- [ ] A "reproduce" section: `git clone && cargo xtask eval` yields the same numbers
 - [ ] Terminal recording: the lattice via `ortu normalize`, then `ortu redact`
 - [ ] Legal note: pseudonymization vs. anonymization; not legal advice
-- [ ] crates.io, PyPI, CI and license badges
+- [ ] crates.io, PyPI, MSRV and license badges
 - [ ] Architecture diagram (a visual version of §4.1)

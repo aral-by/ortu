@@ -1,6 +1,5 @@
 # ortu
 
-[![CI](https://github.com/aral-by/ortu/actions/workflows/ci.yml/badge.svg)](https://github.com/aral-by/ortu/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![MSRV 1.85](https://img.shields.io/badge/MSRV-1.85-informational.svg)](docs/adr/0001-rust-edition-and-msrv.md)
 
@@ -53,7 +52,7 @@ flowchart LR
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M0 | Workspace, CI, licenses, project policies | In progress |
+| M0 | Workspace, quality gate, licenses, project policies | In progress |
 | M1 | Turkish normalization and the spoken-number lattice | Planned |
 | M2 | Core detectors (TCKN, phone, IBAN, names), scoring, tokens | Planned |
 | M3 | Sessions, Realtime/PostCall modes, rehydration, Python API | Planned |
@@ -71,9 +70,10 @@ git clone https://github.com/aral-by/ortu
 cd ortu
 cargo build --workspace
 cargo run -p ortu-cli -- --help
+cargo xtask check        # the quality gate every commit passes
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks every change must pass.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details on the quality gate.
 
 ## Legal note
 
