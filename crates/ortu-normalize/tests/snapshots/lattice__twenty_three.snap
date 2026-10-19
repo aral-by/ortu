@@ -1,0 +1,8 @@
+---
+source: crates/ortu-normalize/tests/lattice.rs
+expression: render(input)
+---
+input: yirmi üç
+run 0: words 0..2
+  23             prior 1.000  splits 0  fallbacks 0  groups [0..2]
+  203            prior 0.368  splits 1  fallbacks 0  groups [0..1, 1..2]

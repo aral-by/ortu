@@ -1,0 +1,14 @@
+---
+source: crates/ortu-normalize/tests/lattice.rs
+expression: render(input)
+---
+input: iki bin yirmi dört
+run 0: words 0..4
+  2024           prior 1.000  splits 0  fallbacks 0  groups [0..4]
+  20204          prior 0.368  splits 1  fallbacks 0  groups [0..3, 3..4]
+  200024         prior 0.368  splits 1  fallbacks 0  groups [0..2, 2..4]
+  21024          prior 0.368  splits 1  fallbacks 0  groups [0..1, 1..4]
+  2000204        prior 0.135  splits 2  fallbacks 0  groups [0..2, 2..3, 3..4]
+  210204         prior 0.135  splits 2  fallbacks 0  groups [0..1, 1..3, 3..4]
+  2100024        prior 0.135  splits 2  fallbacks 0  groups [0..1, 1..2, 2..4]
+  21000204       prior 0.050  splits 3  fallbacks 0  groups [0..1, 1..2, 2..3, 3..4]

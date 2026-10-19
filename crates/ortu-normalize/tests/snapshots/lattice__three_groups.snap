@@ -1,0 +1,14 @@
+---
+source: crates/ortu-normalize/tests/lattice.rs
+expression: render(input)
+---
+input: beş yüz otuz iki yüz yirmi üç kırk beş
+run 0: words 0..9
+  53212345       prior 1.000  splits 0  fallbacks 0  groups [0..4, 4..7, 7..9]
+  532123405      prior 0.368  splits 1  fallbacks 0  groups [0..4, 4..7, 7..8, 8..9]
+  532120345      prior 0.368  splits 1  fallbacks 0  groups [0..4, 4..6, 6..7, 7..9]
+  5321002345     prior 0.368  splits 1  fallbacks 0  groups [0..4, 4..5, 5..7, 7..9]
+  53022345       prior 0.368  splits 1  fallbacks 0  groups [0..3, 3..7, 7..9]
+  5003212345     prior 0.368  splits 1  fallbacks 0  groups [0..2, 2..4, 4..7, 7..9]
+  513212345      prior 0.368  splits 1  fallbacks 0  groups [0..1, 1..4, 4..7, 7..9]
+  5321203405     prior 0.135  splits 2  fallbacks 0  groups [0..4, 4..6, 6..7, 7..8, 8..9]
