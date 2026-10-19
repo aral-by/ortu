@@ -1,0 +1,8 @@
+# Development toolchain. Pinned so that new compiler and Clippy releases cannot
+# break CI unannounced; bumped deliberately in its own commit. The minimum
+# supported version (MSRV) is separate and declared in Cargo.toml
+# (`rust-version`), see docs/adr/0001-rust-edition-and-msrv.md.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

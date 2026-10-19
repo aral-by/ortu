@@ -1,0 +1,29 @@
+[package]
+name = "ortu-cli"
+description = "Command-line interface for ortu, a PII engine for Turkish speech and LLM applications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ortu"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+ortu-audio.workspace = true
+ortu-core.workspace = true
+ortu-crypto.workspace = true
+ortu-normalize.workspace = true
+ortu-stream.workspace = true
+ortu-tr.workspace = true
+
+[lints]
+workspace = true
