@@ -8,7 +8,10 @@
 //! - [`PhoneDetector`] and [`canonical_phone`]: mobile and landline numbers
 //! - [`NameDetector`]: cue-based person names
 //!
-//! plus the cue rules they rely on ([`default_cue_rules`]). Detectors are pure
+//! plus the cue rules they rely on ([`default_cue_rules`]), and, for the
+//! session API, [`canonicalize`], [`assemble`] and [`field_kind`]: canonical
+//! forms of registered values, values assembled across turns, and the kinds
+//! that tool fields hold. Detectors are pure
 //! functions of their input; session state lives in `ortu-stream`. VKN, cards,
 //! email, plates, birth dates, passports, addresses and name gazetteers follow
 //! in M4.
@@ -35,6 +38,7 @@ mod iban;
 mod name;
 mod phone;
 mod tckn;
+mod values;
 
 use ortu_core::{CuePattern, CueRule, Detector, EntityKind};
 
@@ -42,6 +46,7 @@ pub use iban::{IbanDetector, IbanValidator, validate_iban};
 pub use name::NameDetector;
 pub use phone::{PhoneClass, PhoneDetector, PhoneValidator, canonical_phone, validate_phone};
 pub use tckn::{TcknDetector, TcknValidator, validate_tckn};
+pub use values::{Assembled, assemble, assembles, canonicalize, field_kind};
 
 /// The M2 detectors with their default settings.
 #[must_use]

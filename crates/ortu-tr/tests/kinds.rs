@@ -434,6 +434,22 @@ fn name_positive_cases() {
 }
 
 #[test]
+fn names_after_a_form_of_address() {
+    use EntityKind::{FullName, PersonName};
+    assert_eq!(
+        names(&analyze("Sayın Ahmet Yılmaz, borcunuz 1250 TL")),
+        [(FullName, "ahmet yılmaz".to_owned())]
+    );
+    assert_eq!(
+        names(&analyze("sayın Ayşe Hanım")),
+        [(PersonName, "ayşe".to_owned())]
+    );
+    for text in ["Sayın müşterimiz", "sayın yetkili", "Sayın ilgili"] {
+        assert_eq!(names(&analyze(text)), Vec::new(), "{text}");
+    }
+}
+
+#[test]
 fn name_answer_after_an_assistant_question() {
     let bot = analyze_as(
         Speaker::Bot,

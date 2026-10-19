@@ -1,9 +1,10 @@
 //! Person names, cue-based
 //! ([algorithm 09](https://github.com/aral-by/ortu/blob/main/docs/algorithms/09-name-and-address-detection.md)).
 //!
-//! M2 detects names only where Turkish speech marks them: an introducer
-//! (`adım`, `ismim`, `soyadım`, `adım soyadım`), an honorific (`Ahmet Bey`),
-//! or an answer to an assistant asking for a name. Gazetteers, `ben X` and
+//! Names are detected only where Turkish marks them: an introducer (`adım`,
+//! `ismim`, `soyadım`, `adım soyadım`), a form of address (`Sayın Ahmet
+//! Yılmaz`), an honorific (`Ahmet Bey`), or an answer to an assistant asking
+//! for a name. Gazetteers, `ben X` and
 //! capitalization on written channels arrive in M4.
 
 use std::ops::Range;
@@ -14,8 +15,8 @@ use ortu_core::{
 use ortu_normalize::{NormWord, WordRole};
 
 use crate::data::{
-    FULL_NAME_INTRODUCERS, HONORIFICS, NAME_INTRODUCERS, NOT_NAMES, SURNAME_INTRODUCERS,
-    VERB_ENDINGS,
+    ADDRESS_TITLES, FULL_NAME_INTRODUCERS, HONORIFICS, NAME_INTRODUCERS, NOT_NAMES,
+    SURNAME_INTRODUCERS, VERB_ENDINGS,
 };
 
 /// Weight of an introducer or honorific cue (`w_cue`).
@@ -177,7 +178,7 @@ impl Detector for NameDetector {
                 }
             }
             let word = turn.folded(i).unwrap_or_default();
-            if NAME_INTRODUCERS.contains(&word) {
+            if NAME_INTRODUCERS.contains(&word) || ADDRESS_TITLES.contains(&word) {
                 let words = turn.name_words(i + 1, 2);
                 if !words.is_empty() {
                     out.push(turn.candidate(kind_for(&words), words.clone(), word, 0));
