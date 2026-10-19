@@ -61,6 +61,24 @@ impl NormWord {
             .unwrap_or(&self.folded)
     }
 
+    /// The value written inside the word, in compact form, for written text
+    /// where values are glued to labels and separators: a label before the
+    /// last `:` or `=` is dropped (`tc:10000000146`), and a leading `+` and
+    /// hyphens are removed (`+90-532-123-45-67`, `TR33-0006-1005`). `None`
+    /// unless what remains is ASCII letters and digits only.
+    #[must_use]
+    pub fn written_value(&self) -> Option<String> {
+        let stem = self.stem();
+        let value = stem.rsplit([':', '=']).next().unwrap_or(stem);
+        let compact: String = value
+            .trim_start_matches('+')
+            .chars()
+            .filter(|c| *c != '-')
+            .collect();
+        (!compact.is_empty() && compact.bytes().all(|b| b.is_ascii_alphanumeric()))
+            .then_some(compact)
+    }
+
     /// Whether STT emitted the word without any Turkish-specific letters, which
     /// is the only case where `match_key` lookups are trusted.
     #[must_use]
@@ -171,6 +189,24 @@ mod tests {
         assert_eq!(view("beş,").0, "beş");
         assert_eq!(view("(ahmet.yilmaz@ornek.com)").0, "ahmet.yilmaz@ornek.com");
         assert_eq!(view("12'de").2, "12");
+    }
+
+    #[test]
+    fn written_values_drop_labels_plus_signs_and_hyphens() {
+        let written = |raw: &str| {
+            Canonicalizer::default()
+                .canonicalize(&[raw])
+                .remove(0)
+                .written_value()
+        };
+        assert_eq!(written("TC:10000000146").as_deref(), Some("10000000146"));
+        assert_eq!(written("tckn=10000000146").as_deref(), Some("10000000146"));
+        assert_eq!(written("+905321234567").as_deref(), Some("905321234567"));
+        assert_eq!(written("0532-123-45-67").as_deref(), Some("05321234567"));
+        assert_eq!(written("IBAN:TR33-0006").as_deref(), Some("tr330006"));
+        assert_eq!(written("10000000146'dır").as_deref(), Some("10000000146"));
+        assert_eq!(written("beş").as_deref(), None);
+        assert_eq!(written("ahmet.yilmaz@ornek.com").as_deref(), None);
     }
 
     #[test]

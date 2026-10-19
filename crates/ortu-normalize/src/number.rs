@@ -115,9 +115,13 @@ impl From<NumberWord> for Lexeme {
 /// The lexeme of a word and whether it was found only through the fallback.
 fn lexeme(word: &NormWord) -> Option<(Lexeme, bool)> {
     let stem = word.stem();
-    if !stem.is_empty() && stem.len() <= MAX_DIGIT_TOKEN && stem.bytes().all(|b| b.is_ascii_digit())
-    {
+    if is_digit_token(stem) {
         return Some((Lexeme::Digits(stem.to_owned()), false));
+    }
+    // Written text glues digits to labels and separators: `tc:10000000146`,
+    // `0532-123-45-67`, `+905321234567`.
+    if let Some(written) = word.written_value().filter(|w| is_digit_token(w)) {
+        return Some((Lexeme::Digits(written), false));
     }
     if let Some(number) = lookup(NUMBER_WORDS, stem) {
         return Some((number.into(), false));
@@ -128,6 +132,10 @@ fn lexeme(word: &NormWord) -> Option<(Lexeme, bool)> {
         return lookup(FLATTENED_NUMBER_WORDS, stem).map(|number| (number.into(), true));
     }
     None
+}
+
+fn is_digit_token(s: &str) -> bool {
+    !s.is_empty() && s.len() <= MAX_DIGIT_TOKEN && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Whether the word is a number word or a digit token.

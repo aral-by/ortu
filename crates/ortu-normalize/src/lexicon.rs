@@ -95,6 +95,35 @@ pub(crate) const INTERRUPTIONS: &[&[&str]] = &[
 /// Correction markers: the digit run after them overrides the run before them.
 pub(crate) const CORRECTIONS: &[&[&str]] = &[&["yok", "yok"], &["pardon"], &["hayır"], &["hayir"]];
 
+/// Words an assistant uses to acknowledge without taking the floor (`evet`,
+/// `hı hı`, `tamam`, `devam edin`). A turn made only of these, fillers and
+/// interruptions does not end a value the caller is still dictating
+/// ([algorithm 12](https://github.com/aral-by/ortu/blob/main/docs/algorithms/12-cross-turn-assembly.md)).
+/// Plain-ASCII spellings are listed because STT often drops the dots.
+pub(crate) const BACKCHANNELS: &[&str] = &[
+    "evet",
+    "hı",
+    "hıhı",
+    "hi",
+    "hihi",
+    "tamam",
+    "peki",
+    "aynen",
+    "olur",
+    "anladım",
+    "anladim",
+    "dinliyorum",
+    "devam",
+    "edin",
+    "ediniz",
+    "buyurun",
+    "buyrun",
+    "aldım",
+    "aldim",
+    "alıyorum",
+    "aliyorum",
+];
+
 /// Turkish letter names. Vowels are named by themselves and are handled with
 /// single letters in `spell`.
 pub(crate) const LETTER_NAMES: &[(&str, char)] = &[
@@ -151,8 +180,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        CORRECTIONS, FILLERS, FLATTENED_NUMBER_WORDS, INTERRUPTIONS, LETTER_NAMES, NUMBER_WORDS,
-        SPOKEN_SYMBOLS, SUFFIXES,
+        BACKCHANNELS, CORRECTIONS, FILLERS, FLATTENED_NUMBER_WORDS, INTERRUPTIONS, LETTER_NAMES,
+        NUMBER_WORDS, SPOKEN_SYMBOLS, SUFFIXES,
     };
     use crate::fold::{flatten, turkish_fold};
 
@@ -169,6 +198,7 @@ mod tests {
             .chain(LETTER_NAMES.iter().map(|(word, _)| *word))
             .chain(SUFFIXES.iter().copied())
             .chain(FILLERS.iter().copied())
+            .chain(BACKCHANNELS.iter().copied())
             .chain(phrases)
             .collect()
     }
