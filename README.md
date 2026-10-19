@@ -7,7 +7,7 @@
 
 ortu sits between speech-to-text and everything downstream of it: LLMs, transcripts, search indexes, analytics and call recordings. It finds personal data the way Turkish callers actually say it, replaces it with keyed tokens before it reaches an LLM, and gives real values back only where they are genuinely needed, such as tool calls and read-back, under checks that stop an LLM from inventing or corrupting them.
 
-> **Status: pre-alpha.** The design is complete and implementation is under way (milestone M0). Nothing is published to crates.io or PyPI yet, and the API will change.
+> **Status: pre-alpha.** The design is complete and the workspace skeleton (M0) is in place; normalization (M1) is next. Nothing is published to crates.io or PyPI yet, and the API will change.
 
 ## Why
 
@@ -52,8 +52,8 @@ flowchart LR
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M0 | Workspace, quality gate, licenses, project policies | In progress |
-| M1 | Turkish normalization and the spoken-number lattice | Planned |
+| M0 | Workspace, quality gate, licenses, project policies | Done |
+| M1 | Turkish normalization and the spoken-number lattice | Next |
 | M2 | Core detectors (TCKN, phone, IBAN, names), scoring, tokens | Planned |
 | M3 | Sessions, Realtime/PostCall modes, rehydration, Python API | Planned |
 | **v0.1** | **Vertical slice, ready for shadow mode** | |
