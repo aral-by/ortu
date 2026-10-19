@@ -157,12 +157,59 @@ fn check(selected: &[String]) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// Runs the randomized stress tests (ADR-0005). Coverage-guided fuzzing with
+/// cargo-fuzz lives in `fuzz/` and needs Linux or macOS with nightly Rust.
+fn fuzz(args: &[String]) -> ExitCode {
+    let iterations = match args {
+        [] => "1000000",
+        [count] if count.parse::<u64>().is_ok() => count.as_str(),
+        _ => {
+            eprintln!("usage: cargo xtask fuzz [ITERATIONS]");
+            return ExitCode::from(2);
+        }
+    };
+    let args = [
+        "test",
+        "--package",
+        "ortu-normalize",
+        "--release",
+        "--locked",
+        "--test",
+        "stress",
+        "--",
+        "--ignored",
+        "--nocapture",
+    ];
+    println!("==> stress ({iterations} iterations)");
+    println!(
+        "    $ ORTU_STRESS_ITERATIONS={iterations} cargo {}",
+        args.join(" ")
+    );
+    // The iteration count goes to the child only; this process's environment
+    // is never modified.
+    match Command::new("cargo")
+        .args(args)
+        .env("ORTU_STRESS_ITERATIONS", iterations)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => {
+            eprintln!("    stress tests exited with {status}");
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("    could not start `cargo`: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn print_help() {
     let names: Vec<&str> = steps().iter().map(|step| step.name).collect();
     println!(
-        "Usage: cargo xtask check [STEP...]\n\n\
-         Runs the quality gate. Without arguments every step runs.\n\
-         Steps: {}",
+        "Usage:\n  \
+         cargo xtask check [STEP...]    run the quality gate (steps: {})\n  \
+         cargo xtask fuzz [ITERATIONS]  run the randomized stress tests (default 1000000)",
         names.join(", ")
     );
 }
@@ -171,6 +218,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("check") => check(&args[1..]),
+        Some("fuzz") => fuzz(&args[1..]),
         None | Some("help" | "--help" | "-h") => {
             print_help();
             ExitCode::SUCCESS
