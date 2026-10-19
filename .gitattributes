@@ -1,0 +1,7 @@
+# Normalize line endings so that rustfmt and snapshot tests behave the same
+# on Windows, macOS and Linux.
+* text=auto eol=lf
+
+*.wav binary
+*.opus binary
+*.onnx binary
