@@ -1,7 +1,7 @@
 //! One turn through the detection pipeline: normalize, detect, score,
 //! resolve, decide (docs/systemdesign.md, section 4.1, stages 1-5, 7 and 8).
 //! Cross-turn assembly (stage 6) and transforms (stage 9) belong to the
-//! session API (M3).
+//! session API in `ortu-stream`.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -45,6 +45,9 @@ pub struct TurnAnalysis {
     /// For assistant turns: the kind the assistant asked for, which the
     /// caller's next turn will probably contain.
     pub expecting_next: Option<EntityKind>,
+    /// Cue occurrences in the turn; cross-turn assembly reads them to decide
+    /// which kind an unfinished digit run belongs to.
+    pub cues: CueIndex,
 }
 
 /// Runs detectors over turns and decides what to mask.
@@ -90,11 +93,18 @@ impl Analyzer {
         &self.policy
     }
 
+    /// Normalizes one turn with the analyzer's stem dictionary, without
+    /// running detection.
+    #[must_use]
+    pub fn normalize(&self, turn: &Turn) -> NormalizedTurn {
+        let raw: Vec<&str> = turn.words.iter().map(|word| word.text.as_str()).collect();
+        normalize(&raw, &self.normalize)
+    }
+
     /// Analyzes one turn. Entity identifiers start at `first_id`.
     #[must_use]
     pub fn analyze_turn(&self, turn: &Turn, hints: &SessionHints, first_id: u32) -> TurnAnalysis {
-        let raw: Vec<&str> = turn.words.iter().map(|word| word.text.as_str()).collect();
-        let normalized = normalize(&raw, &self.normalize);
+        let normalized = self.normalize(turn);
         let cues = CueIndex::build(&self.cue_rules, &normalized.words);
         let ctx = DetectContext {
             turn,
@@ -167,6 +177,7 @@ impl Analyzer {
             entities,
             masked_words: resolution.masked_words,
             suppressed,
+            cues,
         }
     }
 

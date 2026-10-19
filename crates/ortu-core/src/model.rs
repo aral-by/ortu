@@ -132,6 +132,19 @@ impl Turn {
     }
 }
 
+/// A whole call, as the batch API receives it (section 5.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transcript {
+    /// Opaque call identifier; not personal data. Derives call-scoped token keys.
+    pub call_id: String,
+    /// The tenant whose keys and policy apply.
+    pub tenant_id: String,
+    /// Where the text comes from.
+    pub channel: Channel,
+    /// The turns, in order.
+    pub turns: Vec<Turn>,
+}
+
 /// Exact position in the source text: UTF-8 byte ranges of the turn texts
 /// (section 5.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
