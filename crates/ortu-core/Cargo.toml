@@ -1,0 +1,19 @@
+[package]
+name = "ortu-core"
+description = "Data model, traits, policy and conflict resolution for ortu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[dependencies]
+ortu-normalize.workspace = true
+
+[lints]
+workspace = true

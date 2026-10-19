@@ -1,0 +1,21 @@
+[package]
+name = "ortu-stream"
+description = "Sessions, Realtime and PostCall modes, rehydration and provenance checks for ortu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[dependencies]
+ortu-core.workspace = true
+ortu-crypto.workspace = true
+ortu-tr.workspace = true
+
+[lints]
+workspace = true
