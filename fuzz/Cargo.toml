@@ -1,0 +1,32 @@
+[package]
+name = "ortu-fuzz"
+description = "Coverage-guided fuzz targets for ortu (cargo-fuzz, nightly only)"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ortu-normalize = { path = "../crates/ortu-normalize" }
+
+# A separate workspace: cargo-fuzz needs nightly, the main workspace does not.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "normalize"
+path = "fuzz_targets/normalize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_spoken_number"
+path = "fuzz_targets/parse_spoken_number.rs"
+test = false
+doc = false
+bench = false

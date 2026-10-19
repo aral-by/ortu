@@ -9,6 +9,7 @@ __pycache__/
 *.whl
 
 # Fuzzing artifacts (from M1)
+/fuzz/target/
 /fuzz/artifacts/
 /fuzz/corpus/
 /fuzz/coverage/
