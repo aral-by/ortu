@@ -7,7 +7,7 @@
 
 ortu sits between speech-to-text and everything downstream of it: LLMs, transcripts, search indexes, analytics and call recordings. It finds personal data the way Turkish callers actually say it, replaces it with keyed tokens before it reaches an LLM, and gives real values back only where they are genuinely needed, such as tool calls and read-back, under checks that stop an LLM from inventing or corrupting them.
 
-> **Status: pre-alpha.** Turkish normalization (M1) and the core detectors, scoring, policy and tokens (M2) are implemented and verified as a library; sessions and the Python API (M3) are next. Nothing is published to crates.io or PyPI yet, and the API will change.
+> **Status: pre-alpha.** Turkish normalization (M1), the core detectors, scoring, policy and tokens (M2), and sessions with the LLM loop and the Python API (M3) are implemented and verified as a library: v0.1, ready for shadow mode. Nothing is published to crates.io or PyPI yet, and the API will change.
 
 ## Why
 
@@ -59,6 +59,37 @@ flowchart LR
 - **Explainable**: every decision carries the detector, validator, cues and score that produced it; raw values never reach logs.
 - **Reproducible**: evaluation on seeded synthetic data, runnable with one command.
 
+## Example
+
+A voice-agent turn loop with a scripted LLM ([examples/voice_agent.py](examples/voice_agent.py), output abridged); everything under "LLM sees" is what leaves for the provider:
+
+```text
+caller said     TC'm on sıfır sıfır sıfır sıfır
+LLM sees        TC'm [TCKN_INCOMPLETE:282e20fb]
+
+caller said     sıfır sıfır yüz kırk altı
+LLM sees        [TCKN:9728d124]
+LLM calls       query_debt({"tckn": "[TCKN:9728d124]"})        -> the tool receives 10000000146
+tool returns    {"debt_try": 1250, "name": "[NAME:6a6875ca]", ...}   (as the LLM sees it)
+LLM replies     Sayın [NAME:6a6875ca], 1250 TL borcunuz var; kimlik numaranız [TCKN:9728d124].
+TTS speaks      Sayın Ahmet Yılmaz, 1250 TL borcunuz var; kimlik numaranız *******0146.
+
+invented value  rejected: unknown_value (tckn)
+```
+
+```python
+import ortu
+
+engine = ortu.Engine(key="...")                       # or keys from ORTU_TOKEN_KEY
+session = engine.session(call_id="call-1")
+masked = session.push({"speaker": "caller", "text": "TC'm 10000000146"})   # masked["text"] goes to the LLM
+args = session.guard_tool_args("query_debt", llm_tool_args)               # real values, or ortu.GuardError
+spoken = session.rehydrate(llm_reply)                                    # read-back policy for TTS
+post = session.finish()                                                  # persistent transcript
+```
+
+The same API exists in Rust (`ortu_stream::Engine`, `Session`); see the crate documentation.
+
 ## Documentation
 
 | Document | Contents |
@@ -75,9 +106,10 @@ flowchart LR
 | M0 | Workspace, quality gate, licenses, project policies | Done |
 | M1 | Turkish normalization and the spoken-number lattice | Done |
 | M2 | Core detectors (TCKN, phone, IBAN, names), scoring, tokens | Done |
-| M3 | Sessions, Realtime/PostCall modes, rehydration, Python API | Next |
-| **v0.1** | **Vertical slice, ready for shadow mode** | |
-| M4 to M10 | Remaining detectors, extended Turkish identifiers and health terms (M4b), vault, audio, evaluation, CLI, release, server | Planned |
+| M3 | Sessions, Realtime/PostCall modes, rehydration, provenance checks, Python API | Done |
+| **v0.1** | **Vertical slice, ready for shadow mode** | Ready |
+| M4 | Remaining detectors (VKN, cards, email, plates, birth dates, passports, addresses, name gazetteer), Text channel defaults | Next |
+| M4b to M10 | Extended Turkish identifiers and health terms (M4b), vault, audio, evaluation, CLI, release, server | Planned |
 
 Details and acceptance criteria: [systemdesign.md, section 17](docs/systemdesign.md#17-milestones-and-acceptance-criteria).
 
@@ -87,24 +119,26 @@ Every claim below is a check that ran on the current `main`, on Windows (the mai
 
 | Check | Command | Covers |
 |---|---|---|
-| Quality gate | `cargo xtask check` | rustfmt, Clippy (`pedantic`, warnings as errors), all tests, MSRV 1.85 build, cargo-deny, cargo-audit |
+| Quality gate | `cargo xtask check` | rustfmt, Clippy (`pedantic`, warnings as errors), all tests, MSRV 1.85 build, cargo-deny, cargo-audit, and the Python binding's tests and example (`cargo xtask py`) |
 | Spoken-number examples | part of the test suite | every example of [systemdesign.md §6.3](docs/systemdesign.md#63-spoken-number-parser), with a snapshot of its full lattice |
 | Validators | part of the test suite | the SWIFT IBAN registry example for Turkey; TCKN and IBAN vectors and token values computed by an independent Python implementation, never by the code under test |
 | Phone area codes | part of the test suite | the 82 geographic area codes were compared code by code with the numbering plan BTK notified to the ITU on 2 March 2018 ([ITU-T T02020000D60002](https://itu.int/dms_pub/itu-t/oth/02/02/T02020000D60002MSWS.docx)): no difference; tests pin the plan's mobile, MVNO and satellite ranges and reject its non-personal ranges |
-| Detection per kind | part of the test suite | at least 20 positive and 20 negative end-to-end cases each for TCKN, IBAN, phone numbers and names, on spoken and written Turkish |
-| Property tests | part of the test suite | idempotent Turkish folding; offsets and digit-to-word maps always inside the input; unambiguous readings reproduced exactly; conflict resolution masks every qualifying candidate, never overlaps labels and ignores input order |
-| Stress tests | `cargo xtask fuzz` | 1,000,000 seeded random inputs each through normalization and through the validators and full analyzer, without a panic or invariant violation ([ADR-0005](docs/adr/0005-fuzzing-on-windows.md)) |
+| Detection per kind | part of the test suite | at least 20 positive and 20 negative end-to-end cases each for TCKN, IBAN, phone numbers and names, on spoken and written Turkish; written forms such as `TC:10000000146`, `+905321234567`, `0532-123-45-67` and single-word IBANs |
+| Sessions and the LLM loop | part of the test suite | the agent-question scenario; values split over two and three turns in Realtime and PostCall; values never finished; PostCall equal to batch redaction; tool results, tool arguments, audit events and read-back |
+| Property tests | part of the test suite | idempotent Turkish folding; offsets and digit-to-word maps always inside the input; unambiguous readings reproduced exactly; conflict resolution masks every qualifying candidate, never overlaps labels and ignores input order; corrupted tokens resolve to their own value or fail; identifiers not in the session are rejected at the tool boundary; streaming rehydration equals whole-text rehydration |
+| Stress tests | `cargo xtask fuzz` | 1,000,000 seeded random inputs each through normalization, through the validators and full analyzer, and through sessions (Realtime, rehydration, the tool boundary, PostCall), without a panic or invariant violation ([ADR-0005](docs/adr/0005-fuzzing-on-windows.md)) |
 
 Defects these checks found, all fixed with regression tests:
 
 - M1: Turkish folding was not idempotent for `İ` followed by a combining diaeresis; `bir yüz` was read as 100 although Turkish says `yüz`.
 - M2: an IBAN written as `TR33 0006 ...` lost its check digits; `adım ııı Barış` missed the name behind the filler; `adım adım ilerliyoruz` took a verb for a name; `ismim Can, borcumu ...` ran the name past the comma.
+- M3: values written glued to labels and separators (`TC:10000000146`, `+905321234567`, `0532-123-45-67`, single-word IBANs) were missed; streaming rehydration accepted a token glued to the next chunk's first letter; a value the caller never finished stayed in clear in the persistent transcript; a bot repeating its question broke assembly; a name read back as `Sayın Ahmet Yılmaz` stayed in clear.
 
 Coverage-guided fuzzing (`fuzz/`) has not run yet: it needs Linux or macOS.
 
 ## Building from source
 
-Requirements: [rustup](https://rustup.rs). The toolchain version is pinned in `rust-toolchain.toml` and installed automatically. On Windows, the MSVC toolchain also needs the Visual Studio C++ build tools and a Windows SDK.
+Requirements: [rustup](https://rustup.rs) and Python 3.9 or newer. The toolchain version is pinned in `rust-toolchain.toml` and installed automatically; `cargo xtask py` creates `.venv` and installs maturin on first use. On Windows, the MSVC toolchain also needs the Visual Studio C++ build tools and a Windows SDK.
 
 ```sh
 git clone https://github.com/aral-by/ortu
@@ -112,6 +146,7 @@ cd ortu
 cargo build --workspace
 cargo run -p ortu-cli -- --help
 cargo xtask check        # the quality gate every commit passes
+cargo xtask py           # build the Python extension, run its tests and the example
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details on the quality gate.
