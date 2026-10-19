@@ -7,6 +7,7 @@ members = [
     "crates/ortu-crypto",
     "crates/ortu-eval",
     "crates/ortu-normalize",
+    "crates/ortu-py",
     "crates/ortu-stream",
     "crates/ortu-tr",
     "xtask",
@@ -41,6 +42,7 @@ ortu-tr = { path = "crates/ortu-tr", version = "0.0.0" }
 
 # External crates.
 clap = { version = "4.5", features = ["derive"] }
+pyo3 = { version = "0.30", features = ["abi3-py39"] }
 unicode-normalization = "0.1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }

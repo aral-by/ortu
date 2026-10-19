@@ -9,6 +9,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::env;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 /// Minimum supported Rust version (ADR-0001). A test keeps it in sync with
@@ -18,6 +19,8 @@ const MSRV: &str = "1.85";
 struct Step {
     name: &'static str,
     commands: Vec<Vec<String>>,
+    /// A task with its own logic instead of plain commands.
+    task: Option<fn() -> bool>,
     hint: Option<&'static str>,
 }
 
@@ -31,6 +34,7 @@ fn steps() -> Vec<Step> {
         Step {
             name: "fmt",
             commands: vec![command(&["cargo", "fmt", "--all", "--check"])],
+            task: None,
             hint: Some("run `cargo fmt --all` to apply the formatting"),
         },
         Step {
@@ -46,6 +50,7 @@ fn steps() -> Vec<Step> {
                 "-D",
                 "warnings",
             ])],
+            task: None,
             hint: None,
         },
         Step {
@@ -57,6 +62,7 @@ fn steps() -> Vec<Step> {
                 "--all-features",
                 "--locked",
             ])],
+            task: None,
             hint: None,
         },
         Step {
@@ -81,40 +87,120 @@ fn steps() -> Vec<Step> {
                     "--locked",
                 ]),
             ],
+            task: None,
             hint: None,
         },
         Step {
             name: "deny",
             commands: vec![command(&["cargo", "deny", "check"])],
+            task: None,
             hint: Some("if cargo-deny is missing: `cargo install --locked cargo-deny`"),
         },
         Step {
             name: "audit",
             commands: vec![command(&["cargo", "audit"])],
+            task: None,
             hint: Some("if cargo-audit is missing: `cargo install --locked cargo-audit`"),
+        },
+        Step {
+            name: "py",
+            commands: Vec::new(),
+            task: Some(python),
+            hint: Some("needs Python 3.9 or newer on PATH; `cargo xtask py` runs this step alone"),
         },
     ]
 }
 
 fn run(step: &Step) -> bool {
-    for parts in &step.commands {
-        println!("    $ {}", parts.join(" "));
+    if let Some(task) = step.task {
+        return task();
+    }
+    step.commands.iter().all(|parts| {
         let Some((program, args)) = parts.split_first() else {
-            continue;
+            return true;
         };
-        match Command::new(program).args(args).status() {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
-                eprintln!("    `{program}` exited with {status}");
-                return false;
-            }
-            Err(error) => {
-                eprintln!("    could not start `{program}`: {error}");
-                return false;
-            }
+        execute(Command::new(program).args(args))
+    })
+}
+
+/// Runs a command, echoing it first; reports how it failed.
+fn execute(command: &mut Command) -> bool {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let args: Vec<String> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    println!("    $ {program} {}", args.join(" "));
+    match command.status() {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!("    `{program}` exited with {status}");
+            false
+        }
+        Err(error) => {
+            eprintln!("    could not start `{program}`: {error}");
+            false
         }
     }
-    true
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+}
+
+/// Builds the Python extension into `.venv` with maturin, runs the Python
+/// tests of `ortu-py` and the voice-agent example. Creates the virtual environment and installs maturin
+/// on first use.
+fn python() -> bool {
+    let root = workspace_root();
+    let venv = root.join(".venv");
+    let bin = venv.join(if cfg!(windows) { "Scripts" } else { "bin" });
+    let exe = |name: &str| bin.join(format!("{name}{}", env::consts::EXE_SUFFIX));
+    // UTF-8 mode: tools read pip's output as UTF-8, which fails on Windows
+    // when a path contains non-ASCII characters.
+    let with_env = |mut command: Command| {
+        command
+            .current_dir(&root)
+            .env("VIRTUAL_ENV", &venv)
+            .env("PYTHONUTF8", "1");
+        command
+    };
+    if !exe("python").exists() {
+        let system = if cfg!(windows) { "python" } else { "python3" };
+        let mut create = Command::new(system);
+        create.current_dir(&root).args(["-m", "venv", ".venv"]);
+        if !execute(&mut create) {
+            return false;
+        }
+    }
+    if !exe("maturin").exists() {
+        let mut install = with_env(Command::new(exe("python")));
+        install.args(["-m", "pip", "install", "--quiet", "maturin>=1.7,<2"]);
+        if !execute(&mut install) {
+            return false;
+        }
+    }
+    let mut build = with_env(Command::new(exe("maturin")));
+    build.args([
+        "develop",
+        "--quiet",
+        "--manifest-path",
+        "crates/ortu-py/Cargo.toml",
+    ]);
+    let mut test = with_env(Command::new(exe("python")));
+    test.args([
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "crates/ortu-py/python/tests",
+        "-v",
+    ]);
+    let mut example = with_env(Command::new(exe("python")));
+    example.arg("examples/voice_agent.py");
+    execute(&mut build) && execute(&mut test) && execute(&mut example)
 }
 
 fn check(selected: &[String]) -> ExitCode {
@@ -212,7 +298,8 @@ fn print_help() {
     println!(
         "Usage:\n  \
          cargo xtask check [STEP...]    run the quality gate (steps: {})\n  \
-         cargo xtask fuzz [ITERATIONS]  run the randomized stress tests (default 1000000)",
+         cargo xtask fuzz [ITERATIONS]  run the randomized stress tests (default 1000000)
+           cargo xtask py                 build the Python extension and run its tests",
         names.join(", ")
     );
 }
@@ -222,6 +309,13 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("check") => check(&args[1..]),
         Some("fuzz") => fuzz(&args[1..]),
+        Some("py") => {
+            if python() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
         None | Some("help" | "--help" | "-h") => {
             print_help();
             ExitCode::SUCCESS

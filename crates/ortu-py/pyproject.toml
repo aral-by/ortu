@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "ortu"
+description = "PII detection, masking and encryption for Turkish speech and LLM applications"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "Aral Büyükyanbolu" }]
+keywords = ["pii", "redaction", "turkish", "speech", "privacy", "llm"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Text Processing :: Linguistic",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/aral-by/ortu"
+
+[tool.maturin]
+# The module is a single native extension; the stub file next to this file
+# (ortu.pyi) is packaged with it.
+module-name = "ortu"
+features = ["pyo3/extension-module"]

@@ -1,0 +1,32 @@
+[package]
+name = "ortu-py"
+description = "Python binding for ortu: a thin wrapper over the Rust core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+# The Python module is called `ortu`. The library is only ever loaded by
+# Python, so it has no Rust test harness: a test executable would need the
+# Python DLL at run time. Its tests are Python tests (`cargo xtask py`).
+[lib]
+name = "ortu"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+ortu-core.workspace = true
+ortu-crypto.workspace = true
+ortu-stream.workspace = true
+pyo3.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
