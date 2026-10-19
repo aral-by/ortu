@@ -168,10 +168,13 @@ fn fuzz(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Every crate with a `tests/stress.rs` target (ADR-0005).
     let args = [
         "test",
         "--package",
         "ortu-normalize",
+        "--package",
+        "ortu-tr",
         "--release",
         "--locked",
         "--test",
