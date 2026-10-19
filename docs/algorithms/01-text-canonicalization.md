@@ -9,7 +9,7 @@ Produce a matching-friendly view of every word (case-folded, Unicode-normalized,
 | | |
 |---|---|
 | Pipeline stage | Normalize (first step) |
-| Crate | `ortu-normalize` |
+| Crate | `ortu-normalize` (`fold.rs`, `canonical.rs`) |
 | Modes | Realtime and PostCall |
 | Channels | Speech and Text |
 
@@ -17,21 +17,22 @@ Produce a matching-friendly view of every word (case-folded, Unicode-normalized,
 
 ```rust
 // Input: the raw words of one turn (never mutated).
-&[Word]
+&[impl AsRef<str>]
 
 // Output: one canonical view per word.
 pub struct NormWord {
-    pub source: WordRef,          // turn index + word index + byte range
-    pub folded: CompactString,    // linguistically correct Turkish lowercase
-    pub match_key: CompactString, // folded, then dotless-i and diacritics flattened
+    pub word: WordRef,            // index of the word in its turn
+    pub bytes: Range<u32>,        // byte range in the turn text (words joined by single spaces)
+    pub folded: String,           // linguistically correct Turkish lowercase
+    pub match_key: String,        // folded, then dotless-i and diacritics flattened
     pub stem_len: Option<u16>,    // byte length of the stem when a suffix was split
 }
 ```
 
 Two keys are produced on purpose:
 
-- `folded` is the linguistically correct form. Detectors that care about spelling (email, names on the Text channel) use it.
-- `match_key` is a lossy skeleton used for dictionary lookups (number words, cues, fillers), because STT output varies in diacritics: the same word arrives as `üç`, `uc` or `Üç`.
+- `folded` is the linguistically correct form. Dictionaries (number words, fillers, letter names) match on it, and so do detectors that care about spelling.
+- `match_key` is a lossy skeleton. It is consulted **only** for words written without any Turkish-specific letter, which is how STT writes a word when it drops diacritics (`uc` for `üç`). See the lookup rule below.
 
 ## Data flow
 
@@ -40,48 +41,50 @@ flowchart LR
     IN(["Word.text RAW<br/>IBAN’ım"]) --> S1["NFC"] --> S2["Unify apostrophes"] --> S3["Turkish fold"]
     S3 --> FO(["folded<br/>ıban'ım"])
     S3 --> S4["Flatten"] --> MK(["match_key<br/>iban'im"])
-    S3 --> S5["Split suffix"] --> SL(["stem_len = 4<br/>stem ıban, suffix ım"])
-    DICT[("Stem and suffix dictionaries<br/>folded at build time")] -.-> S5
-    IN -.->|"byte range"| SRC(["source: WordRef"])
+    S3 --> S5["Split suffix"] --> SL(["stem_len = 5 bytes<br/>stem ıban, suffix ım"])
+    SUF[("Suffix list<br/>lexicon.rs")] -.-> S5
+    STEMS[("Stem set<br/>Canonicalizer::with_stems")] -.-> S5
+    IN -.->|"position in turn"| SRC(["word: WordRef<br/>bytes: 0..8"])
     FO & MK & SL & SRC --> NW(["NormWord"])
     NW --> NEXT["02 Filler marking<br/>03 Lattice<br/>10 Cue matching"]
 ```
 
 | From | Data | To |
 |---|---|---|
-| STT via `push` / `redact` | `Word.text` (RAW) | this step; the source is never modified |
-| Build-time dictionaries | Folded stems and suffixes | suffix splitter |
-| This step | `NormWord.folded` | Text-channel detectors (email, names) |
-| This step | `NormWord.match_key` | All dictionary lookups (02, 03, 10) |
-| This step | `NormWord.source` | Every later span and audio region |
+| STT via `push` / `redact` | Raw word text | this step; the source is never modified |
+| `lexicon.rs` (compiled in) | Suffix list | suffix splitter |
+| Configuration (`Canonicalizer::with_stems`) | Stems to split after | suffix splitter |
+| This step | `NormWord.folded` | Dictionary lookups (02, 03, spelling), Text-channel detectors |
+| This step | `NormWord.match_key` | Fallback number lookups for plain-ASCII words (03) |
+| This step | `NormWord.word`, `NormWord.bytes` | Every later span and audio region |
 
 ## Algorithm
 
 ```
-canonicalize(word):
-    s = nfc(word.text)
-    s = unify_apostrophes(s)          # U+2019, U+2018, U+00B4, U+0060, U+02BC -> U+0027
-    s = turkish_fold(s)
-    s, trimmed = trim_edge_punctuation(s)   # keep internal '.', '@', '-', '_'
-    folded = s
-    match_key = flatten(folded)
-    stem_len = split_suffix(folded)
-    return NormWord { source, folded, match_key, stem_len }
+canonicalize(words):
+    offset = 0
+    for (index, raw) in words:
+        bytes = offset .. offset + len(raw); offset = bytes.end + 1
+        folded = trim_edge_punctuation(turkish_fold(raw))   # keep internal '.', '@', '-', '_'
+        match_key = flatten(folded)
+        stem_len = split_suffix(folded)
+        yield NormWord { word: index, bytes, folded, match_key, stem_len }
 
 turkish_fold(s):
-    for each char c in s:
-        'İ'           -> 'i'
-        'I'           -> 'ı'
-        'i' + U+0307  -> 'i'          # repair output of non-Turkish lowercasing upstream
-        otherwise     -> unicode_lowercase(c)
+    for each char c in nfc(s):
+        'İ'                   -> 'i'
+        'I'                   -> 'ı'
+        U+0307 after 'i'      -> (dropped)   # repair output of non-Turkish lowercasing upstream
+        U+2019, U+2018, U+00B4, U+0060, U+02BC -> '\''
+        otherwise             -> unicode_lowercase(c)
 
 flatten(s):
-    'ı' -> 'i', 'ç' -> 'c', 'ğ' -> 'g', 'ö' -> 'o', 'ş' -> 's', 'ü' -> 'u'
+    'ı', 'î' -> 'i';  'ç' -> 'c';  'ğ' -> 'g';  'ö' -> 'o';  'ş' -> 's';  'ü', 'û' -> 'u';  'â' -> 'a'
 
 split_suffix(s):
     if s contains '\'':  return position of the apostrophe       # TC'm -> tc + m
-    else: longest match of s against the stem dictionary,
-          accepted only if the remainder is a known suffix       # numaram -> numara + m
+    else: longest stem-set prefix of s whose remainder
+          is in the suffix list                                  # numaram -> numara + m
 ```
 
 ```mermaid
@@ -92,41 +95,44 @@ flowchart LR
     F --> SS["stem = ıban, suffix = ım"]
 ```
 
-**Dictionary rule:** every dictionary (number words, cues, fillers, gazetteers) is passed through the same `turkish_fold` and `flatten` functions **at build time**. Folded forms are never written by hand. This guarantees that `IBAN`, `iban` and `İBAN` all reach the same entry.
+**Dictionary rule:** every Turkish word list lives in `crates/ortu-normalize/src/lexicon.rs` and is written in folded form. A test folds every entry and fails if the result differs, so `IBAN`, `iban` and `İBAN` can never become separate entries (ADR-0004).
 
-**Lookup order:** exact `folded` lookup first; `match_key` lookup only as a fallback, with a prior penalty (see [03](03-spoken-number-lattice.md)). Flattening causes real collisions, for example `ön` (front) and `on` (ten), or `uç` (tip) and `üç` (three). The penalty keeps these collisions from outranking an exact match, while still accepting the far more common case of STT dropping diacritics.
+**Lookup rule:** exact lookup on the folded stem first. The flattened `match_key` is consulted only when the word contains **no** Turkish-specific letter (`folded == match_key`), and a hit through it costs `FALLBACK_COST` in the lattice ([03](03-spoken-number-lattice.md)). This keeps `uc` (STT dropped the diacritics) readable as `üç` while `uç` ("tip") and `ön` ("front") are never read as numbers: a word written with Turkish letters was meant as written.
 
 ## Worked example
 
-| Raw | `folded` | `match_key` | Stem / suffix |
-|---|---|---|---|
-| `İSTANBUL` | `istanbul` | `istanbul` | none |
-| `IBAN'ım` | `ıban'ım` | `iban'im` | `ıban` / `ım` |
-| `TC’m` | `tc'm` | `tc'm` | `tc` / `m` |
-| `numaram` | `numaram` | `numaram` | `numara` / `m` |
-| `Üç` | `üç` | `uc` | none |
-| `uc` | `uc` | `uc` | none (fallback match for `üç`) |
+| Raw | `folded` | `match_key` | Stem / suffix | Number word? |
+|---|---|---|---|---|
+| `İSTANBUL` | `istanbul` | `istanbul` | none | no |
+| `IBAN’ım` | `ıban'ım` | `iban'im` | `ıban` / `ım` | no |
+| `TC’m` | `tc'm` | `tc'm` | `tc` / `m` | no |
+| `numaram` (stem `numara` configured) | `numaram` | `numaram` | `numara` / `m` | no |
+| `Üç` | `üç` | `uc` | none | yes, exact |
+| `uc` | `uc` | `uc` | none | yes, through the fallback |
+| `uç` | `uç` | `uc` | none | no: contains `ç` |
 
 ## Complexity
 
-O(n) in the number of bytes per word; no allocation when the word is already canonical (`CompactString` stays inline up to 24 bytes).
+O(n) in the number of bytes per word, plus one allocation each for `folded` and `match_key`. Small-string optimizations wait for the M7 benchmarks (ADR-0004).
 
 ## Edge cases
 
 - **Upstream lowercasing:** some STT engines lowercase with non-Turkish rules and emit `i̇` (i plus combining dot). `turkish_fold` repairs it.
-- **Acronyms:** `IBAN` folds to `ıban`, which looks wrong but is consistent, because dictionaries are folded by the same function.
+- **Acronyms:** `IBAN` folds to `ıban`, which looks wrong but is consistent, because dictionary entries are folded by the same function.
 - **Mixed tokens:** `12'de` keeps `12` as the stem and `de` as the suffix; the number parser reads the stem.
-- **Emails and URLs:** internal punctuation is preserved; only leading and trailing punctuation is trimmed, and the trimmed range is recorded.
+- **Emails and URLs:** internal punctuation is preserved; only leading and trailing punctuation is trimmed. `bytes` always covers the raw word, trimmed punctuation included, so a masked span never leaves a fragment behind.
+- **Punctuation-only tokens** (`...`) fold to an empty string and are marked as fillers ([02](02-filler-and-correction-marking.md)).
 
 ## Design rationale
 
 - **Why not use `to_lowercase()`:** it is locale-independent and maps `I` to `i` and `İ` to `i̇`, which is wrong for Turkish and breaks dictionary matching.
-- **Why two keys instead of one:** a single linguistic key misses STT variants; a single flattened key causes collisions in places where spelling matters. Two keys with ordered lookup give the recall of the second and the precision of the first.
+- **Why two keys instead of one:** a single linguistic key misses STT variants; a single flattened key causes collisions (`ön`/`on`, `uç`/`üç`). Restricting the flattened key to plain-ASCII words gives the recall of the first case without the false readings of the second.
 - **Why never mutate the source:** every downstream result (spans, audio regions, audit evidence) must point to exact source bytes. Canonicalization is a view, not a rewrite.
 
 ## Tests and invariants
 
-- `turkish_fold` is idempotent: `fold(fold(s)) == fold(s)`.
+- `turkish_fold` is idempotent: `fold(fold(s)) == fold(s)` (proptest over random Unicode strings).
 - `match_key` is a function of `folded` only.
-- Every `NormWord.source` byte range is within the source word.
-- Snapshot tests for the table above; proptest over random Unicode strings: no panics, valid UTF-8 boundaries.
+- Every `NormWord.bytes` lies within the turn text (proptest), and slicing the turn text with it returns the raw word (unit test).
+- Every `lexicon.rs` entry is in folded form; keyed tables have no duplicate keys.
+- Unit tests for every row of the table above.

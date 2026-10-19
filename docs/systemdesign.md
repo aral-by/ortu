@@ -212,7 +212,7 @@ Rule: the Python binding and the server only wrap the core. Detection, normaliza
 | Crate | Responsibility | Depends on | Created in |
 |---|---|---|---|
 | `ortu-core` | Data model, traits, pipeline orchestration, policy, conflict resolution | `ortu-normalize` | M0 |
-| `ortu-normalize` | Turkish case folding, spoken number parser, fillers, offset map | none (pure) | M0 |
+| `ortu-normalize` | Turkish case folding, spoken number parser, fillers, offset map; Turkish word lists in `lexicon.rs` | `unicode-normalization` only (ADR-0004) | M0 |
 | `ortu-tr` | Turkish detectors, validators and gazetteers | `ortu-core` | M0 |
 | `ortu-crypto` | HMAC tokens, AES-GCM vault, `KeyProvider`, zeroization | `ortu-core` | M0 |
 | `ortu-audio` | Timestamp mapping, PCM masking, WAV I/O | `ortu-core` | M0 |
@@ -370,15 +370,17 @@ Rust's `to_lowercase()` maps `İ` to `i̇` (i plus a combining dot) and `I` to `
 İ -> i,  I -> ı,  everything else -> Unicode lowercase
 ```
 
-NFC normalization follows. Apostrophe variants (`'`, `’`, `‘`, `´`) collapse to a single form. Suffix splitting separates stem and suffix in forms such as `TC'm`, `TC'mi` and `numaram`, which cue matching relies on (§7.3).
+NFC normalization runs before and, where lowercasing creates a new composition, after folding, so that folding is idempotent. Apostrophe variants (`'`, `’`, `‘`, `´`) collapse to a single form. Suffix splitting separates stem and suffix in forms such as `TC'm`, `TC'mi` and `numaram`, which cue matching relies on (§7.3).
+
+Every Turkish word list used by normalization (number words, fillers, interruptions, correction markers, suffixes, letter names, spoken symbols) lives in one data-only module, `crates/ortu-normalize/src/lexicon.rs`. Entries are written in folded form, and tests enforce it (ADR-0004).
 
 ### 6.2 Fillers and interruptions
 
 Dictionary-based marking. Tokens are **marked, not deleted**, so offsets stay intact:
 
 - Fillers: `ııı`, `eee`, `hmm`, `şey`, `yani`, `işte`
-- Interruptions: `bir saniye`, `bir dakika`, `dur`, `şöyle`, `bakayım`, `pardon`, `yok yok`, `hayır`
-- Correction markers: `yok yok`, `pardon`, `hayır`. These indicate that the following sequence **may override** the previous one (§6.4).
+- Interruptions: `bir saniye`, `bir dakika`, `dur`, `şöyle`, `bakayım`, `bakalım`
+- Correction markers: `yok yok`, `pardon`, `hayır`. Between two digit runs they indicate that the following sequence **overrides** the previous one (§6.4); elsewhere they are ordinary content (`hayır` as a plain "no").
 
 When digit sequences are joined, filler and interruption tokens count as **skippable gaps**, up to `max_gap_tokens` (default 4).
 
@@ -394,7 +396,7 @@ When digit sequences are joined, filler and interruption tokens count as **skipp
 | Thousand | bin | x1000 |
 | Million / billion | milyon, milyar | x10^6, x10^9 |
 
-STT variants are part of the lexicon: unaccented or garbled spellings such as `uc` (üç), `dort`, `bes`, `alti`, `kirk`, `altmis`, `yetmis`, `doksn`. Digit tokens (`12`, `5`) and mixed forms (`12'de`) are also supported.
+STT variants are part of the lexicon: unaccented or garbled spellings such as `uc` (üç), `dort`, `bes`, `alti`, `kirk`, `altmis`, `yetmis`, `doksn`. They are consulted only for words written without any Turkish-specific letter, so `uç` ("tip") and `ön` ("front") are never read as numbers (ADR-0004). Digit tokens (`12`, `5`) and mixed forms (`12'de`) are also supported.
 
 #### Grouping grammar
 
@@ -404,6 +406,7 @@ Turkish numbers compose **from largest to smallest**: `üç yüz kırk beş` = 3
 group   := [unit? 'yüz']? ten? unit?
          | unit                          (single-digit reading)
 extends := magnitude of next word < smallest filled magnitude of current group
+                                 (Turkish has no `bir yüz` or `bir bin`: `yüz` and `bin` alone mean 100 and 1000)
 ```
 
 Examples:
@@ -423,9 +426,11 @@ Some sequences admit several readings. `yüz yirmi`, for example, reads as `120`
 
 The parser does not return a single result. It produces a **lattice of at most K readings (default 8)**, each with a prior score:
 
-- The natural grouping (longest grammatical group) gets the highest prior.
-- Digit-by-digit reading (every word 0-9) comes second.
-- Forced splits get the lowest prior.
+- The natural grouping (every word extends its group whenever the grammar allows) gets prior 1.0. A digit-by-digit reading of single digits is natural too, because a unit can never extend another unit.
+- Every forced split (a split where the grammar allowed extension) multiplies the prior by e^-1.
+- A word recognized only through the flattened table (`uc` for `üç`) costs 0.7 of a split.
+
+Costs are integers in thousandths and the search is a deterministic beam of width 32 (algorithm 03, ADR-0004).
 
 **Selection is left to the detectors.** The TCKN detector looks for a reading that yields 11 digits with a valid checksum. A reading that passes validation wins even when its prior is low. This is the strongest idea in the system: *the checksum acts as an oracle that resolves STT ambiguity.* See decision D4 in §19.
 
@@ -435,10 +440,10 @@ Every produced digit points back to its source word:
 
 ```rust
 pub struct DigitRun {
-    pub digits: SmallString<[u8; 32]>,
+    pub digits: String,
     pub source: Vec<WordRef>,      // digits[i] -> source word
-    pub prior: f32,
-    pub trace: NormalizationTrace,
+    pub prior: f32,                // exp(-(cost - best cost)), 1.0 for the best reading
+    pub trace: NormalizationTrace, // groups, forced splits, fallback lookups, cost
 }
 ```
 
@@ -453,6 +458,8 @@ Letter-by-letter reading is supported for the `TR` prefix of an IBAN, for email 
 - `te re`, `t r` -> `TR`
 - `et`, `at` -> `@`; `nokta` -> `.`; `alt çizgi` -> `_`; `tire` -> `-`
 - Turkish spelling alphabet: `Ankara'nın A'sı` ("A as in Ankara") -> `A` (v1.1)
+
+Many letter names are also ordinary words (`ve`, `de`, `o`), so a spelled run needs at least two letters, or a single letter between two number words (the letter group of a plate such as `34 A 1234`). Downstream detectors validate every run. Letter names and spoken symbols live in `lexicon.rs`; email assembly from spoken symbols arrives with the email detector in M4.
 
 ---
 
@@ -1016,7 +1023,7 @@ Techniques:
 - Workspace Clippy policy: `all` and `pedantic` as warnings, plus `unwrap_used`, `expect_used`, `todo`, `dbg_macro`, `print_stdout` and `print_stderr` (allowed only in tests through `.clippy.toml`). The quality gate turns every warning into an error.
 - `cargo-deny` (`deny.toml`): license allowlist (MIT, Apache-2.0 with or without the LLVM exception, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib), OpenSSL banned, duplicate-version warnings, crates.io as the only allowed source.
 - `cargo-audit` in every run of the quality gate.
-- **Fuzzing (`cargo-fuzz`):** targets `normalize`, `parse_spoken_number`, `iban_validate`, `redact_pipeline` and `rehydrate`. Invariants: no panics, no out-of-bounds offsets, word count preserved from input to output.
+- **Fuzzing (`cargo-fuzz`, in `fuzz/`):** targets `normalize`, `parse_spoken_number`, `iban_validate`, `redact_pipeline` and `rehydrate`. Invariants: no panics, no out-of-bounds offsets, word count preserved from input to output. Coverage-guided fuzzing needs Linux or macOS; on Windows, seeded randomized stress tests with the same generators and invariants run through `cargo xtask fuzz` (ADR-0005).
 - **Property-based tests (`proptest`):**
   - Every valid TCKN is detected regardless of reading style.
   - After redaction, no input PII value appears as a substring of the output.
@@ -1037,7 +1044,7 @@ Techniques:
 | # | Milestone | Scope | Acceptance criteria |
 |---|---|---|---|
 | **M0** | Skeleton | Workspace with the eight M0 crates (§4.4), quality gate `cargo xtask check` (fmt, clippy, test, MSRV, deny, audit), licenses, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, ADR template | `cargo xtask check` passes; `cargo run -p ortu-cli -- --help` works |
-| **M1** | Normalization | Turkish case folding, filler and interruption marking, spoken number parser with lattice and offset map, spelled-out input | Every example in the §6.3 table is covered by a snapshot test; no panic in 1M fuzz iterations; offset proptest passes |
+| **M1** | Normalization | Turkish case folding, filler and interruption marking, spoken number parser with lattice and offset map, spelled-out input | Every example in the §6.3 table is covered by a snapshot test; 1M randomized stress iterations without a panic or invariant violation (`cargo xtask fuzz`, ADR-0005); offset proptest passes |
 | **M2** | Core detectors and scoring | TCKN, phone, IBAN, person name (cue-based); cue system; baseline §8 (hand-set weights, conflict resolution, policy); `ortu.toml`; `Token` (HMAC, call scope) | Official test vectors pass for every validator; at least 20 positive and 20 negative unit tests per kind; conflict-resolution proptests |
 | **M3** | Session and LLM loop | Realtime/PostCall modes, cross-turn assembly, session map, `rehydrate`, streaming `Rehydrator`, `guard_tool_args` (provenance check), basic `ortu-py` API | Agent question then caller answer scenario; TCKN split across 3 turns; zero hold-back in Realtime; the rehydration and provenance proptests from §16; end-to-end example from Python |
 | **v0.1** | **Vertical slice** | M0 to M3 | Can run in **shadow mode** inside a voice agent: produces metrics only (kind, score, latency; no raw values) without affecting decisions |
@@ -1085,8 +1092,8 @@ ortu/
 ├── schemas/                   # JSON schemas (versioned)                                     M2
 ├── data/eval/v1/              # synthetic gold set (generator output, seeded)                M7
 ├── eval/baselines/            # Presidio comparison, Dockerfile                              M7
-├── fuzz/                                                                                     M1
-├── benches/                                                                                  M1
+├── fuzz/                      # cargo-fuzz targets, own workspace, nightly (ADR-0005)        M1
+├── benches/                                                                                  M7
 ├── examples/                  # Rust, Python, CLI, voice agent with an LLM                   M3
 ├── docs/
 │   ├── systemdesign.md        # this document                                                M0

@@ -16,3 +16,5 @@ An ADR records one decision that deviates from, refines or fills a gap in [syste
 | [0001](0001-rust-edition-and-msrv.md) | Rust edition 2024 and MSRV 1.85 | Accepted |
 | [0002](0002-cli-exit-codes.md) | CLI exit codes | Accepted |
 | [0003](0003-local-quality-gate.md) | Local quality gate instead of hosted CI | Accepted |
+| [0004](0004-normalization-data-and-dependencies.md) | Normalization data, dependencies and types | Accepted |
+| [0005](0005-fuzzing-on-windows.md) | Randomized stress tests where coverage-guided fuzzing is unavailable | Accepted |
