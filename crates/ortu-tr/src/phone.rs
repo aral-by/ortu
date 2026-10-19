@@ -15,7 +15,11 @@ const NATIONAL: usize = 10;
 /// What a national number belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhoneClass {
-    /// `5xx`.
+    /// Any `5xx`. The 2018 plan assigns 501, 505-507, 530-549, 551-555 and
+    /// 559 to mobile operators, 510, 516 and 524 to MVNOs and 592 to satellite
+    /// mobile; accepting the whole `5xx` block also covers later allocations
+    /// (recall-first). Non-personal ranges (800, 811, 812, 850, 888, 898, 900)
+    /// are not accepted.
     Mobile,
     /// A geographic area code.
     Landline,
@@ -173,6 +177,26 @@ mod tests {
             canonical_phone("4440123456").map(|(_, class)| class),
             Some(PhoneClass::Corporate)
         );
+    }
+
+    #[test]
+    fn ranges_of_the_2018_numbering_plan() {
+        // Mobile, MVNO and satellite mobile ranges are personal numbers.
+        for ndc in [
+            "501", "530", "549", "551", "559", "510", "516", "524", "592",
+        ] {
+            let digits = format!("{ndc}1234567");
+            assert_eq!(
+                canonical_phone(&digits).map(|(_, class)| class),
+                Some(PhoneClass::Mobile),
+                "{ndc}"
+            );
+        }
+        // Freephone, two-stage access, nomadic, value-added and Northern Cyprus
+        // numbers are not geographic or mobile numbers of Turkey's plan.
+        for ndc in ["800", "811", "812", "850", "888", "898", "900", "392"] {
+            assert_eq!(canonical_phone(&format!("{ndc}1234567")), None, "{ndc}");
+        }
     }
 
     #[test]

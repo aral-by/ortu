@@ -62,7 +62,7 @@ strip_prefix(r):
     remainder has exactly 10 digits
 ```
 
-`AREA_CODES` (82 codes: 81 provinces, two for Istanbul, from the BTK numbering plan) is compiled into `ortu-tr` (`src/data.rs`); a test checks the count and uniqueness. `PhoneDetector::mask_corporate` turns on masking of `444` numbers. Plates arrive in M4.
+`AREA_CODES` (82 codes: 81 provinces, two for Istanbul) is compiled into `ortu-tr` (`src/data.rs`) and was checked code by code against the national numbering plan ICTA (BTK) notified to the ITU on 2 March 2018 (ITU-T document T02020000D60002) with no difference; 392 (Northern Cyprus) is not part of that plan. A test checks the count and uniqueness. Every `5xx` number counts as mobile, which covers the plan's mobile, MVNO and satellite ranges and later allocations. `PhoneDetector::mask_corporate` turns on masking of `444` numbers. Plates arrive in M4.
 
 ### Canonical form
 

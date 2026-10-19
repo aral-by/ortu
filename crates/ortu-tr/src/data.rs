@@ -66,8 +66,13 @@ pub(crate) const CUE_RULES: &[CueRuleData] = &[
 ];
 
 /// Geographic area codes of Turkey: 81 provinces, two for Istanbul (212
-/// European side, 216 Asian side). Source: the BTK national numbering plan;
-/// verify against its current edition when updating.
+/// European side, 216 Asian side).
+///
+/// Source: the national numbering plan that ICTA (BTK) notified to the ITU on
+/// 2 March 2018 (ITU-T document T02020000D60002). On 2026-10-20 this list was
+/// compared code by code with the plan's geographic NDCs: 82 codes, no
+/// difference. 392 (Northern Cyprus) is reachable through +90 but is not part
+/// of Turkey's plan and is not listed. Re-check when BTK publishes a newer plan.
 pub(crate) const AREA_CODES: &[u16] = &[
     212, 216, 222, 224, 226, 228, 232, 236, 242, 246, 248, 252, 256, 258, 262, 264, 266, 272, 274,
     276, 282, 284, 286, 288, 312, 318, 322, 324, 326, 328, 332, 338, 342, 344, 346, 348, 352, 354,

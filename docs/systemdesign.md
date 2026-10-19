@@ -536,7 +536,7 @@ pub trait Validator: Send + Sync {
 
 #### Phone
 
-- 10-digit national number: mobile `5xx`, landline `2xx/3xx/4xx` with one of the 82 geographic area codes (81 provinces; Istanbul has two), compiled into `ortu-tr` from the BTK numbering plan.
+- 10-digit national number: mobile `5xx`, landline `2xx/3xx/4xx` with one of the 82 geographic area codes (81 provinces; Istanbul has two), compiled into `ortu-tr` and checked code by code against the national numbering plan ICTA (BTK) notified to the ITU on 2 March 2018. Every `5xx` number counts as mobile: the plan's mobile, MVNO (510, 516, 524) and satellite (592) ranges all start with 5, and the whole block also covers later allocations. Non-personal ranges (800, 811, 812, 888, 898, 900) are not phone PII.
 - Prefixes: `+90`, `0090`, `90`, `0`.
 - Corporate `444 xx xx` numbers are **not PII**. Configurable (`PhoneDetector::mask_corporate`); not masked by default.
 - Values are canonicalized to E.164 (`+905321234567`), so every reading of a number yields the same token.
@@ -1250,6 +1250,7 @@ Each entry records the context, the options considered, the decision and its con
 5. **Adopter-specific rules:** Institution dictionaries and custom detectors are written in the adopter's own code through the `Detector` trait. No adopter-specific code enters the ortu core.
 6. **LLM robustness of the token format:** Measure in M3 how often `[TCKN:7f3a9c2e]` is corrupted by different LLMs; change the format through an ADR if needed.
 7. **`ortu-server` protocol order:** gRPC or HTTP first? (Recommended: HTTP first, then gRPC.)
+8. **Nomadic `850` numbers:** the numbering plan lists them as location-independent numbers. They are mostly held by businesses but can be assigned to individuals; M2 does not treat them as personal. Decide with evidence from shadow mode.
 
 ---
 
