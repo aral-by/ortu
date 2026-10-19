@@ -261,6 +261,8 @@ fn fuzz(args: &[String]) -> ExitCode {
         "ortu-normalize",
         "--package",
         "ortu-tr",
+        "--package",
+        "ortu-stream",
         "--release",
         "--locked",
         "--test",

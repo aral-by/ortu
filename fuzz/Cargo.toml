@@ -12,7 +12,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 ortu-core = { path = "../crates/ortu-core" }
+ortu-crypto = { path = "../crates/ortu-crypto" }
 ortu-normalize = { path = "../crates/ortu-normalize" }
+ortu-stream = { path = "../crates/ortu-stream" }
 ortu-tr = { path = "../crates/ortu-tr" }
 
 # A separate workspace: cargo-fuzz needs nightly, the main workspace does not.
@@ -36,6 +38,20 @@ bench = false
 [[bin]]
 name = "iban_validate"
 path = "fuzz_targets/iban_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rehydrate"
+path = "fuzz_targets/rehydrate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "redact_pipeline"
+path = "fuzz_targets/redact_pipeline.rs"
 test = false
 doc = false
 bench = false
