@@ -13,4 +13,4 @@ mod key;
 mod token;
 
 pub use key::{EnvKeyProvider, KeyError, KeyProvider, SecretKey, StaticKeyProvider};
-pub use token::{Token, Tokenizer};
+pub use token::{Token, Tokenizer, canonical_form};

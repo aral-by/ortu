@@ -27,6 +27,15 @@ impl Token {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The hexadecimal digest between the colon and the closing bracket
+    /// (`7f3a9c2e`).
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        self.0
+            .rsplit_once(':')
+            .map_or("", |(_, rest)| rest.trim_end_matches(']'))
+    }
 }
 
 impl fmt::Display for Token {
@@ -104,8 +113,13 @@ fn derive_call_key(tenant_key: &SecretKey, call_id: &str) -> Result<SecretKey, K
     Ok(SecretKey::from_bytes(*okm))
 }
 
-/// The canonical form of a value, so that every reading of the same value
-/// yields the same token (algorithm 13). Idempotent.
+/// The canonical form the token is computed over: two values with the same
+/// canonical form share a token (algorithm 13). Idempotent.
+#[must_use]
+pub fn canonical_form(kind: EntityKind, value: &SecretValue) -> SecretValue {
+    SecretValue::new(canonical(kind, value.expose_secret()))
+}
+
 fn canonical(kind: EntityKind, value: &str) -> String {
     match kind {
         EntityKind::Tckn | EntityKind::Vkn | EntityKind::CreditCard => {
@@ -189,6 +203,10 @@ mod tests {
             token(call, "call-42", Tckn, "100000001", short),
             "[TCKN_INCOMPLETE:dbbe704b]"
         );
+        let issued = Tokenizer::new(&key(), "tenant", call, "call-42")
+            .unwrap()
+            .token(Tckn, &SecretValue::new("100000001"), short);
+        assert_eq!(issued.digest(), "dbbe704b");
     }
 
     #[test]
