@@ -1,0 +1,28 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Python bindings (from M3)
+__pycache__/
+*.py[cod]
+.venv/
+*.whl
+
+# Fuzzing artifacts (from M1)
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/coverage/
+
+# Local, never committed: notes, real data, keys
+/.private/
+*.key
+*.age
+.env
+.env.*
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
