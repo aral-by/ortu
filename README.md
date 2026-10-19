@@ -7,7 +7,7 @@
 
 ortu sits between speech-to-text and everything downstream of it: LLMs, transcripts, search indexes, analytics and call recordings. It finds personal data the way Turkish callers actually say it, replaces it with keyed tokens before it reaches an LLM, and gives real values back only where they are genuinely needed, such as tool calls and read-back, under checks that stop an LLM from inventing or corrupting them.
 
-> **Status: pre-alpha.** Turkish normalization and the spoken-number lattice (M1) are implemented and verified; core detectors (M2) are next. Nothing is published to crates.io or PyPI yet, and the API will change.
+> **Status: pre-alpha.** Turkish normalization (M1) and the core detectors, scoring, policy and tokens (M2) are implemented and verified as a library; sessions and the Python API (M3) are next. Nothing is published to crates.io or PyPI yet, and the API will change.
 
 ## Why
 
@@ -71,8 +71,8 @@ flowchart LR
 |---|---|---|
 | M0 | Workspace, quality gate, licenses, project policies | Done |
 | M1 | Turkish normalization and the spoken-number lattice | Done |
-| M2 | Core detectors (TCKN, phone, IBAN, names), scoring, tokens | Next |
-| M3 | Sessions, Realtime/PostCall modes, rehydration, Python API | Planned |
+| M2 | Core detectors (TCKN, phone, IBAN, names), scoring, tokens | Done |
+| M3 | Sessions, Realtime/PostCall modes, rehydration, Python API | Next |
 | **v0.1** | **Vertical slice, ready for shadow mode** | |
 | M4 to M10 | Remaining detectors, vault, audio, evaluation, CLI, release, server | Planned |
 
@@ -86,10 +86,17 @@ Every claim below is a check that ran on the current `main`, on Windows (the mai
 |---|---|---|
 | Quality gate | `cargo xtask check` | rustfmt, Clippy (`pedantic`, warnings as errors), all tests, MSRV 1.85 build, cargo-deny, cargo-audit |
 | Spoken-number examples | part of the test suite | every example of [systemdesign.md §6.3](docs/systemdesign.md#63-spoken-number-parser), with a snapshot of its full lattice |
-| Property tests | part of the test suite | idempotent Turkish folding; offsets and digit-to-word maps always inside the input; unambiguous readings reproduced exactly |
-| Stress test | `cargo xtask fuzz` | 1,000,000 seeded random inputs without a panic or invariant violation ([ADR-0005](docs/adr/0005-fuzzing-on-windows.md)) |
+| Validators | part of the test suite | the SWIFT IBAN registry example for Turkey; TCKN and IBAN vectors and token values computed by an independent Python implementation, never by the code under test |
+| Detection per kind | part of the test suite | at least 20 positive and 20 negative end-to-end cases each for TCKN, IBAN, phone numbers and names, on spoken and written Turkish |
+| Property tests | part of the test suite | idempotent Turkish folding; offsets and digit-to-word maps always inside the input; unambiguous readings reproduced exactly; conflict resolution masks every qualifying candidate, never overlaps labels and ignores input order |
+| Stress tests | `cargo xtask fuzz` | 1,000,000 seeded random inputs each through normalization and through the validators and full analyzer, without a panic or invariant violation ([ADR-0005](docs/adr/0005-fuzzing-on-windows.md)) |
 
-Defects these checks found during M1, fixed with regression tests: Turkish folding was not idempotent for `İ` followed by a combining diaeresis, and `bir yüz` was read as 100 although Turkish says `yüz`. Coverage-guided fuzzing (`fuzz/`) has not run yet: it needs Linux or macOS.
+Defects these checks found, all fixed with regression tests:
+
+- M1: Turkish folding was not idempotent for `İ` followed by a combining diaeresis; `bir yüz` was read as 100 although Turkish says `yüz`.
+- M2: an IBAN written as `TR33 0006 ...` lost its check digits; `adım ııı Barış` missed the name behind the filler; `adım adım ilerliyoruz` took a verb for a name; `ismim Can, borcumu ...` ran the name past the comma.
+
+Coverage-guided fuzzing (`fuzz/`) has not run yet: it needs Linux or macOS.
 
 ## Building from source
 
