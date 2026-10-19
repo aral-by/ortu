@@ -100,16 +100,43 @@ impl IbanDetector {
             });
         }
         let previous = usize::try_from(start.checked_sub(1)?).ok()?;
-        let rest = ctx
-            .normalized
-            .words
-            .get(previous)?
-            .folded
-            .strip_prefix("tr")?;
+        let written = ctx.normalized.words.get(previous)?.written_value()?;
+        let rest = written.strip_prefix("tr")?;
         (rest.len() < BODY_DIGITS && rest.bytes().all(|b| b.is_ascii_digit())).then(|| Prefix {
             start: start - 1,
             digits: rest.to_owned(),
         })
+    }
+
+    /// IBANs written as one word: `TR330006100519786457841326`,
+    /// `IBAN:TR33-0006-1005-1978-6457-8413-26`. The shape alone is strong
+    /// evidence, so a failed checksum is still masked, as `_INVALID`.
+    fn written(ctx: &DetectContext<'_>, out: &mut Vec<Candidate>) {
+        for (index, word) in ctx.normalized.words.iter().enumerate() {
+            let Some(written) = word.written_value() else {
+                continue;
+            };
+            let Some(body) = written.strip_prefix("tr") else {
+                continue;
+            };
+            if body.len() != BODY_DIGITS || !body.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let value = format!("TR{body}");
+            let validator = validate_iban(&value);
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            out.push(Candidate {
+                kind: EntityKind::Iban,
+                detector: ID,
+                words: index..index.saturating_add(1),
+                validator,
+                value: SecretValue::new(value),
+                prior: 1.0,
+                trace: None,
+                cues: Vec::new(),
+                score_floor: (validator != ValidatorOutcome::Passed).then_some(PARTIAL_FLOOR),
+            });
+        }
     }
 
     fn candidate(
@@ -141,6 +168,7 @@ impl Detector for IbanDetector {
     }
 
     fn detect(&self, ctx: &DetectContext<'_>, out: &mut Vec<Candidate>) {
+        Self::written(ctx, out);
         for lattice in &ctx.normalized.lattices {
             let prefix = Self::prefix(ctx, lattice);
             let cue = ctx.has_cue(EntityKind::Iban, &lattice.words);
