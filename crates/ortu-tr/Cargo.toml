@@ -14,6 +14,7 @@ publish.workspace = true
 
 [dependencies]
 ortu-core.workspace = true
+ortu-normalize.workspace = true
 
 [lints]
 workspace = true
