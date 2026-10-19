@@ -1,0 +1,25 @@
+# ortu configuration example (docs/systemdesign.md, sections 8.3 and 10.2).
+# Copy to ortu.toml and adjust. Unknown keys and kinds are rejected.
+
+[policy]
+# recall_first | balanced | precision_first. A mode sets both thresholds when
+# they are omitted: 0.50/0.30, 0.60/0.40 and 0.75/0.60.
+mode = "recall_first"
+# Scores at or above this are masked.
+mask_threshold = 0.50
+# Scores from here up to mask_threshold are masked and flagged for review.
+review_threshold = 0.30
+# block | redact_all: what happens when processing fails (section 3.3).
+fail_mode = "block"
+
+# Credit cards are always redacted; any other transform is rejected (decision D13).
+[policy.kinds.credit_card]
+transform = "redact"
+
+# Province and district stay in clear by default (section 7.2).
+[policy.kinds.address]
+keep_levels = ["province", "district"]
+
+[tokens]
+# call | tenant. Call scope prevents linking one person across calls (section 10.2).
+scope = "call"

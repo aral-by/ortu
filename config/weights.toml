@@ -1,0 +1,20 @@
+# Score model weights (docs/algorithms/10-cue-scoring.md).
+# Hand-set initial values; the M7 calibration replaces them and records the
+# result in docs/calibration.md. A test keeps this file equal to the defaults
+# compiled into ortu-core until then.
+
+[weights]
+# A bare pattern match is not enough on its own.
+detector = -1.0
+# A passed checksum is the strongest single signal.
+validator = 3.0
+# Right length, wrong checksum is evidence against.
+invalid = 2.0
+# Lattice preference.
+prior = 1.0
+# STT confidence is noisy; small weight.
+stt = 0.5
+# Assembly across turns is plausible but less certain.
+cross = 0.5
+# Cue influence decays by e every 6 words.
+tau = 6.0
