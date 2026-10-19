@@ -321,9 +321,11 @@ pub struct Entity {
     pub id: EntityId,               // unique within a call
     pub kind: EntityKind,
     pub span: SourceSpan,           // may span several turns
-    pub score: Score,               // 0.0..=1.0
+    pub words: Range<u32>,          // word indices, for audio regions and masking
+    pub score: f32,                 // 0.0..=1.0
+    pub review: bool,               // between review and mask threshold: masked and flagged
     pub evidence: Evidence,         // explainability
-    pub value: SecretValue,         // raw value, zeroized, hidden from Debug
+    pub value: SecretValue,         // canonical raw value, zeroized, hidden from Debug
 }
 
 #[non_exhaustive]
@@ -336,12 +338,15 @@ pub enum EntityKind {
 
 pub struct Evidence {
     pub detector: &'static str,
-    pub validator: ValidatorOutcome,        // Passed | Failed { reason } | NotApplicable
-    pub cues: SmallVec<[CueHit; 4]>,        // context cues that fired
-    pub normalization: NormalizationTrace,  // which spoken-number reading was chosen
-    pub cross_turn: bool,
+    pub validator: ValidatorOutcome,                // Passed | Failed(reason) | NotApplicable
+    pub cues: Vec<CueHit>,                          // context cues that fired
+    pub normalization: Option<NormalizationTrace>,  // spoken-number reading, numeric kinds only
+    pub cross_turn: bool,                           // a cue came from the previous assistant turn
+    pub score: ScoreBreakdown,                      // every term of the score (section 8.1)
 }
 ```
+
+`EntityKind` also carries its `ortu.toml` name (`credit_card`), its token label (`TCKN`; names, surnames and full names share `NAME`) and its specificity for conflict resolution. Detectors emit `Candidate`s (kind, words, canonical value, validator outcome, lattice prior, optional score floor); the analyzer scores and resolves them into entities (ADR-0006).
 
 ### 5.4 `SecretValue` (security type)
 
@@ -353,12 +358,11 @@ impl fmt::Debug for SecretValue {
         f.write_str("SecretValue(<redacted>)")
     }
 }
-// No Display impl. No Serialize impl.
-// The raw value is reachable only through `expose_secret()`, which is
-// visible inside the crate and to the crypto crate.
+// No Display, Serialize or PartialEq impl.
+// The raw value is reachable only through `expose_secret()`.
 ```
 
-This prevents PII from leaking through `println!`, `tracing` or `serde_json` **at compile time**.
+This prevents PII from leaking through `println!`, `tracing` or `serde_json` **at compile time**, and rules out timing-dependent comparisons by accident. Rust has no friend visibility, so `expose_secret()` is public; its name makes every call site easy to find, and each one is reviewed (tokenization, encryption, the tool boundary, read-back).
 
 ### 5.5 Output
 
@@ -488,6 +492,7 @@ Many letter names are also ordinary words (`ve`, `de`, `o`), so a spelled run ne
 pub trait Detector: Send + Sync {
     fn id(&self) -> &'static str;
     fn kinds(&self) -> &'static [EntityKind];
+    fn stems(&self) -> &'static [&'static str] { &[] }   // registered for suffix splitting
     fn detect(&self, ctx: &DetectContext<'_>, out: &mut Vec<Candidate>);
 }
 
@@ -496,7 +501,7 @@ pub trait Validator: Send + Sync {
 }
 ```
 
-`DetectContext` provides the normalized turns, digit lattices, the cue index and the session state carried over from earlier turns. Detectors are **pure**; state is held only inside `ortu-stream`.
+`DetectContext` provides the source turn, its normalization (canonical words, roles, digit lattices, spelled runs), the cue index and `SessionHints` (the kind the previous assistant turn asked for, and the agent's own names). Detectors are **pure**; state is held only inside `ortu-stream`. Numeric detectors read only **word-aligned** digit windows: a window never starts or ends inside the digits of one spoken word, so `üç yüz` (`300`) is never split (ADR-0006).
 
 ### 7.2 Entity specifications
 
@@ -526,13 +531,15 @@ pub trait Validator: Send + Sync {
 - 26 characters: `TR` + 2 check digits + 5-digit bank code + 1 reserved digit (`0`) + 16-digit account number.
 - ISO 13616 mod-97 validation, computed as a streaming remainder instead of a big integer.
 - When read aloud, `TR` is often omitted: 24 digits plus an `iban` cue are validated with an assumed `TR` prefix.
-- Partial: `iban` cue plus at least 16 digits is masked without a checksum.
+- The prefix may be spelled (`te re`), written (`TR`) or written with the check digits attached (`TR33`); the body then completes the prefix.
+- Partial: `iban` cue plus at least 16 digits is masked without a checksum (score floor 0.7).
 
 #### Phone
 
-- 10-digit national number: mobile `5xx`, landline `2xx/3xx/4xx` (area code table in `data/area_codes.tsv`).
+- 10-digit national number: mobile `5xx`, landline `2xx/3xx/4xx` with one of the 82 geographic area codes (81 provinces; Istanbul has two), compiled into `ortu-tr` from the BTK numbering plan.
 - Prefixes: `+90`, `0090`, `90`, `0`.
-- Corporate `444 xx xx` numbers are **not PII**. Configurable; not masked by default.
+- Corporate `444 xx xx` numbers are **not PII**. Configurable (`PhoneDetector::mask_corporate`); not masked by default.
+- Values are canonicalized to E.164 (`+905321234567`), so every reading of a number yields the same token.
 - Cues: `telefon`, `numaram`, `cep`, `gsm`, `ulaşabilirsiniz`, `arayın`
 
 #### Credit card
@@ -549,7 +556,7 @@ pub trait Validator: Send + Sync {
 
 Three layers:
 
-1. **Cue patterns (high confidence):** `adım X`, `ismim X`, `ben X`, `soyadım X`, `X Bey/Hanım`, `adım soyadım X Y`
+1. **Cue patterns (high confidence):** `adım X`, `ismim X`, `soyadım X`, `X Bey/Hanım`, `adım soyadım X Y`, and the caller's short answer (at most four words) after an assistant asks for a name. `ben X` arrives with the gazetteer in M4: without one, `ben belediyeden arıyorum` would mask `belediyeden`. A name never extends past punctuation in the source (`ismim Can, borcumu ...`), and titles that take an honorific (`Müdür Bey`) are not names.
 2. **Gazetteer (medium confidence):** Turkish first-name list (~10k) and surname list (~50k), matched with Aho-Corasick. The source license must be compatible with open source (ADR).
 3. **NER (optional, §8.4)**
 
@@ -587,13 +594,15 @@ Rule-based in v1:
 ```rust
 pub struct CueRule {
     pub kind: EntityKind,
-    pub patterns: &'static [&'static str],  // normalized stem forms
+    pub patterns: Vec<CuePattern>,          // folded words; a trailing `*` makes the last word a prefix
     pub window_before: u16,                 // in words
     pub window_after: u16,
-    pub boost: f32,
-    pub cross_turn: bool,                   // may the cue sit in an agent turn?
+    pub boost: f32,                         // w_cue for this rule
+    pub cross_turn: bool,                   // an assistant asking with this cue opens the next turn
 }
 ```
+
+Patterns are matched on the flattened stem of each word, so `IBAN'ım`, `ibanım` and `ıban` all match `iban`, and `numara*` matches `numaram` and `numarası`. Cues add evidence only and never become values, so the diacritic collisions that §6.3 guards against do not apply. The M2 rules (TCKN, IBAN, phone, and name questions) live in `crates/ortu-tr/src/data.rs`, written in folded form and checked by tests.
 
 **Critical pattern: question and answer.** The agent or bot asks `"TC kimlik numaranızı alabilir miyim?"` ("May I have your national ID number?") and the caller says only the number in the **next turn**. The cue in the agent turn is written into session state, and the next caller turn is scored with that context (§9.3).
 
@@ -618,7 +627,7 @@ score = sigmoid(logit)
 
 Weights live in `config/weights.toml` and are initially set by hand. In M7 they are calibrated on the evaluation set with a grid search or logistic regression, and the calibration report is written to `docs/calibration.md`.
 
-`decay(d) = exp(-d / tau)`, default tau = 6 words.
+`decay(d) = exp(-d / tau)`, default tau = 6 words. `w_cue_i` is the boost of the rule that fired. When STT reports no confidence for the span, the STT term is 0. A cue from the previous assistant turn counts as a cue at the edge of its window; `w_cross` is reserved for values assembled across turns (M3). Partial-match floors (TCKN 0.7, IBAN 0.7) are applied after the sigmoid. `config/weights.toml` holds the initial weights, and a test keeps it equal to the compiled-in defaults.
 
 ### 8.2 Conflict resolution
 
@@ -628,7 +637,8 @@ For candidates covering the same words:
 2. The more specific kind wins: `Iban > CreditCard > Tckn > Vkn > Phone > Plate > generic digits`.
 3. On a tie, the higher score wins.
 4. Losing candidates are not discarded; they are recorded in the audit trail with a `suppressed_by` field.
-5. **Mask union:** regardless of the winner, the set of masked words is the **union** of all candidates with `score >= tau_mask`. This protects recall.
+5. **Mask union:** regardless of the winner, the set of masked words is the **union** of all candidates with `score >= review_threshold` (both masked and masked-for-review candidates qualify). This protects recall.
+6. Remaining ties are broken by the longer span, then the earlier start, so the result never depends on input order.
 
 Algorithm: sort candidates by `(start, -len)` and process them with a sweep line, O(n log n).
 
@@ -646,7 +656,12 @@ transform = "redact"         # cannot be changed (§7.2)
 
 [policy.kinds.address]
 keep_levels = ["province", "district"]
+
+[tokens]
+scope = "call"               # call | tenant (section 10.2)
 ```
+
+The full example is `config/ortu.example.toml`; a test keeps it equal to the defaults. Unknown keys and kinds are rejected. A mode sets both thresholds when they are omitted: `recall_first` 0.50/0.30, `balanced` 0.60/0.40, `precision_first` 0.75/0.60. Thresholds must satisfy `0 <= review <= mask <= 1`, and `credit_card` accepts no transform other than `redact`.
 
 ### 8.4 NER (optional, v1.1)
 
@@ -785,7 +800,7 @@ pub trait VaultStore: Send + Sync {
 
 Bundled implementations:
 
-- `KeyProvider`: `EnvKeyProvider` (development), `FileKeyProvider` (age-encrypted file). AWS KMS and Vault Transit adapters behind feature flags (v1.1).
+- `KeyProvider`: `EnvKeyProvider` (development), `FileKeyProvider` (age-encrypted file). AWS KMS and Vault Transit adapters behind feature flags (v1.1). M2 implements `token_key` with `StaticKeyProvider` (in memory) and `EnvKeyProvider` (`ORTU_TOKEN_KEY_<TENANT>`, then `ORTU_TOKEN_KEY`, 64 hex characters); `data_key` and `FileKeyProvider` arrive with the vault in M5 (ADR-0006).
 - `VaultStore`: `InMemoryVault` (tests), `SqliteVault`, `PostgresVault` (feature flag).
 
 ### 10.5 Reveal
@@ -1062,7 +1077,7 @@ Techniques:
 |---|---|---|---|
 | **M0** | Skeleton | Workspace with the eight M0 crates (§4.4), quality gate `cargo xtask check` (fmt, clippy, test, MSRV, deny, audit), licenses, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, ADR template | `cargo xtask check` passes; `cargo run -p ortu-cli -- --help` works |
 | **M1** | Normalization | Turkish case folding, filler and interruption marking, spoken number parser with lattice and offset map, spelled-out input | Every example in the §6.3 table is covered by a snapshot test; 1M randomized stress iterations without a panic or invariant violation (`cargo xtask fuzz`, ADR-0005); offset proptest passes |
-| **M2** | Core detectors and scoring | TCKN, phone, IBAN, person name (cue-based); cue system; baseline §8 (hand-set weights, conflict resolution, policy); `ortu.toml`; `Token` (HMAC, call scope) | Official test vectors pass for every validator; at least 20 positive and 20 negative unit tests per kind; conflict-resolution proptests |
+| **M2** | Core detectors and scoring | TCKN, phone, IBAN, person name (cue-based); cue system; baseline §8 (hand-set weights, conflict resolution, policy); `ortu.toml`; `Token` (HMAC, call scope) | Validators pass published reference examples where they exist (SWIFT IBAN registry) and otherwise vectors from an independent implementation of the published algorithm (ADR-0006); at least 20 positive and 20 negative end-to-end cases per kind; conflict-resolution proptests; 1M randomized stress iterations of the analyzer |
 | **M3** | Session and LLM loop | Realtime/PostCall modes, cross-turn assembly, session map, `rehydrate`, streaming `Rehydrator`, `guard_tool_args` (provenance check), basic `ortu-py` API | Agent question then caller answer scenario; TCKN split across 3 turns; zero hold-back in Realtime; the rehydration and provenance proptests from §16; end-to-end example from Python |
 | **v0.1** | **Vertical slice** | M0 to M3 | Can run in **shadow mode** inside a voice agent: produces metrics only (kind, score, latency; no raw values) without affecting decisions |
 | **M4** | Remaining detectors | VKN, card (with CVV and expiry), email, plate, birth date, passport, address (rule-based), name gazetteer; Text channel defaults | M2 test criteria for every new kind; Text channel tests |
@@ -1094,7 +1109,7 @@ ortu/
 │   ├── ortu-core/
 │   ├── ortu-normalize/
 │   ├── ortu-tr/
-│   │   └── data/              # gazetteers, area codes, provinces/districts, cue dictionaries M2
+│   │   └── data/              # large curated datasets: gazetteers, provinces/districts     M4
 │   ├── ortu-crypto/
 │   ├── ortu-audio/
 │   ├── ortu-stream/
@@ -1106,7 +1121,7 @@ ortu/
 ├── config/
 │   ├── ortu.example.toml                                                                     M2
 │   └── weights.toml                                                                          M2
-├── schemas/                   # JSON schemas (versioned)                                     M2
+├── schemas/                   # JSON schemas of CLI and server output (versioned)            M8
 ├── data/eval/v1/              # synthetic gold set (generator output, seeded)                M7
 ├── eval/baselines/            # Presidio comparison, Dockerfile                              M7
 ├── fuzz/                      # cargo-fuzz targets, own workspace, nightly (ADR-0005)        M1

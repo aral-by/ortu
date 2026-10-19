@@ -59,7 +59,7 @@ pub struct CueRule {
 ```
 cue_hits(candidate):
     for rule in rules[candidate.kind]:
-        for occurrence of rule.patterns (stem match on NormWord):
+        for occurrence of rule.patterns (match on flatten(stem); a trailing * matches a prefix):
             d = word distance from the occurrence to the candidate span
             if occurrence is inside [span.start - window_before, span.end + window_after]:
                 yield CueHit { rule, distance: d }
@@ -75,7 +75,7 @@ logit = w_detector
       - w_invalid   * [validator failed and length exact]
       + sum over cue hits:  w_cue(rule) * exp(-distance / tau)
       + w_prior     * lattice_prior
-      + w_stt       * mean(stt_confidence over span)
+      + w_stt       * mean(stt_confidence over span)     # 0 when STT reports none
       + w_cross     * [assembled across turns]
 
 score = sigmoid(logit)

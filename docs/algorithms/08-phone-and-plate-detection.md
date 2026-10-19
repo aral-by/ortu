@@ -21,7 +21,7 @@ flowchart LR
         LAT(["DigitLattice<br/>05321234567"]) --> P1["Strip prefix<br/>+90, 0090, 90, 0"]
         P1 --> N10(["5321234567"])
         N10 --> P2["Classify<br/>mobile 5xx / landline area code / 444"]
-        AC[("data/area_codes.tsv")] -.-> P2
+        AC[("AREA_CODES<br/>ortu-tr data.rs")] -.-> P2
         P2 --> P3["Canonicalize E.164"]
         P3 --> PC(["Candidate Phone<br/>+905321234567"])
     end
@@ -39,7 +39,7 @@ flowchart LR
 |---|---|---|
 | 03 | `DigitLattice`, number groups | prefix stripper, plate assembler |
 | Spelling normalizer | Letters | plate assembler |
-| `data/area_codes.tsv`, `data/plate_formats.tsv` | Valid area codes and plate shapes | classifiers |
+| `AREA_CODES` (compiled in), `data/plate_formats.tsv` (M4) | Valid area codes and plate shapes | classifiers |
 | This step | Canonical phone (E.164) and plate | 10 Cue scoring; 13 uses the canonical form for tokens |
 
 ## Phone numbers
@@ -62,7 +62,7 @@ strip_prefix(r):
     remainder has exactly 10 digits
 ```
 
-`AREA_CODES` is loaded from `data/area_codes.tsv`.
+`AREA_CODES` (82 codes: 81 provinces, two for Istanbul, from the BTK numbering plan) is compiled into `ortu-tr` (`src/data.rs`); a test checks the count and uniqueness. `PhoneDetector::mask_corporate` turns on masking of `444` numbers. Plates arrive in M4.
 
 ### Canonical form
 
@@ -119,5 +119,6 @@ O(L * R) per run for phones; O(words) per candidate for plates.
 ## Tests and invariants
 
 - Every prefix style canonicalizes to the same E.164 value.
+- End-to-end (`crates/ortu-tr/tests/kinds.rs`): 22 positive readings (digit tokens, grouped and digit-by-digit speech, `90` and `0090` prefixes, landlines, a trailing extra digit) and 20 negative cases (444, 850, 800 and 900 numbers, unknown area codes, wrong lengths, prices, dates, plates).
 - Every province code 01-81 with every valid letter/digit combination from the table.
 - Negative tests: 444 numbers, 10-digit runs with invalid area codes, plate patterns with province 00 or 82+.

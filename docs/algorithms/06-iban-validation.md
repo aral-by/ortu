@@ -121,6 +121,8 @@ O(26) per candidate; at most R = 8 readings per run.
 
 ## Edge cases
 
+- **Check digits attached to the prefix** (`TR33 0006 ...`): the prefix word contributes its digits, and a body window of the remaining length completes it.
+
 - **Partial reads:** callers often stop after the first few groups and continue later; cross-turn assembly ([12](12-cross-turn-assembly.md)) joins the pieces.
 - **Overlapping TCKN windows:** a 24-digit IBAN body can contain an 11-digit window that passes the TCKN checksum. IBAN wins on specificity ([11](11-conflict-resolution.md)).
 - **Spaces and groups in text:** the Text channel removes spaces and normalizes case before validation; the span covers the original spacing.
@@ -132,6 +134,8 @@ O(26) per candidate; at most R = 8 readings per run.
 
 ## Tests and invariants
 
-- Synthetic IBANs from the generator (real bank codes, computed check digits) always validate.
+- The SWIFT IBAN registry example (`TR33 0006 1005 1978 6457 8413 26`) and 20 IBANs generated independently in Python (real bank codes, computed check digits) validate, written with `TR33` attached, after `te re`, after a bare `TR` or after a cue (`crates/ortu-tr/tests/kinds.rs`).
+- A wrong check digit after a cue is masked as `_INVALID`; a body without `TR` and without a cue is not claimed.
+- Fuzz target `iban_validate` and the analyzer stress test cover arbitrary input.
 - Any single-character substitution or adjacent transposition fails (a known property of mod-97).
 - Spoken readings with and without `te re` produce the same candidate.

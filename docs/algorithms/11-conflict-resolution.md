@@ -28,7 +28,7 @@ flowchart LR
     S3 --> S4["Greedy non-overlapping winners"]
     S4 --> WIN(["Winner: Iban"])
     S4 --> SUP(["Suppressed: Tckn, Phone<br/>suppressed_by = Iban"])
-    CL --> S5["Union of words<br/>score >= mask_threshold"]
+    CL --> S5["Union of words<br/>score >= review_threshold"]
     S5 --> MW(["Masked words w3-w20"])
     WIN --> S6["Decide<br/>mask / review / pass"]
     POL[("ortu.toml thresholds,<br/>address keep_levels")] -.-> S6
@@ -65,17 +65,19 @@ resolve(candidates):
         ranked = sort cluster by rank(c) descending
         winners = []
         for c in ranked:
-            if c.score >= mask_threshold and no winner overlaps c:
+            if c.score >= review_threshold and no winner overlaps c:
                 winners.push(c)
             else if a winner w overlaps c:
                 audit(c.suppressed_by = w.id)
 
         # 3. Mask union: every qualifying candidate contributes its words.
-        masked_words |= union(words(c) for c in cluster if c.score >= mask_threshold)
+        masked_words |= union(words(c) for c in cluster if c.score >= review_threshold)
 
 rank(c) = ( c.validator == Passed,
             specificity(c.kind),        # Iban > CreditCard > Tckn > Vkn > Phone > Plate > generic
-            c.score )
+            c.score,
+            len(c.words),               # ties: the longer span,
+            -c.words.start )            # then the earlier start: order-independent
 ```
 
 ## Worked example
@@ -128,5 +130,7 @@ Sorting O(n log n); cluster sweep O(n); greedy selection O(k^2) per cluster with
 ## Tests and invariants
 
 - Proptest: the masked word set is a superset of every qualifying candidate's words.
-- Proptest: the result does not depend on input order.
+- Proptest: the result does not depend on input order (shuffled inputs, tied scores).
+- Proptest: every qualifying candidate is either a winner or recorded as suppressed.
+- Qualification uses `review_threshold`: candidates masked for review are masked too (`crates/ortu-core/tests/resolve_properties.rs`, 5,000 cases each).
 - Winners never overlap each other.

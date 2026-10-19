@@ -31,12 +31,13 @@ Paste the summary into your pull request description. Changes that touch platfor
 - All identifiers, comments, documentation and file names are in English. Turkish appears only as data (spoken examples, cue phrases, gazetteers).
 - Library crates never print to stdout or stderr, never call `unwrap` or `expect` outside tests, and never log raw values. `SecretValue` exists to make the last rule a compile-time guarantee; do not work around it.
 - New algorithms get a document under [docs/algorithms/](docs/algorithms/README.md) following the structure described there.
-- Turkish word lists are data, not code: normalization's lists live in `crates/ortu-normalize/src/lexicon.rs`, written in folded form (tests enforce it). Changing a list never requires touching an algorithm (ADR-0004).
+- Turkish word lists are data, not code: normalization's lists live in `crates/ortu-normalize/src/lexicon.rs` and the detectors' cue rules, area codes and name lists in `crates/ortu-tr/src/data.rs`, written in folded form (tests enforce it). Changing a list never requires touching an algorithm (ADR-0004, ADR-0006).
+- Test vectors for validators and tokens come from a published reference or an independent implementation, never from the code under test.
 
 ## Fuzzing and stress tests
 
 - `cargo xtask fuzz [ITERATIONS]` runs the seeded randomized stress tests (default 1,000,000 iterations; `ORTU_STRESS_SEED` reproduces a failure). It works on every platform.
-- On Linux or macOS, coverage-guided fuzzing is available as well: `cargo +nightly fuzz run normalize` and `cargo +nightly fuzz run parse_spoken_number`. It does not link on Windows with MSVC (ADR-0005).
+- On Linux or macOS, coverage-guided fuzzing is available as well: `cargo +nightly fuzz run <target>` with `normalize`, `parse_spoken_number` or `iban_validate`. It does not link on Windows with MSVC (ADR-0005).
 
 ## Commits and pull requests
 

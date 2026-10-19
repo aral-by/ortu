@@ -79,7 +79,7 @@ The `0x00` separator prevents ambiguity between `kind_label` and `canon` (no kin
 
 | Kind | Canonical form | Example input | Canonical |
 |---|---|---|---|
-| `Tckn`, `Vkn` | digits only | `100 000 001 46` | `10000000146` |
+| `Tckn`, `Vkn`, `CreditCard` | digits only | `100 000 001 46` | `10000000146` |
 | `Iban` | uppercase, no spaces | `tr96 0006 1000 ...` | `TR96000610...` |
 | `Phone` | E.164 | `0532 123 45 67` | `+905321234567` |
 | `PersonName`, `FullName` | Turkish case fold, single spaces | `AHMET  Yılmaz` | `ahmet yılmaz` |
@@ -108,7 +108,7 @@ flowchart LR
 | `beş yüz otuz iki yüz yirmi üç kırk beş altmış yedi` | `+905321234567` | Passed | `[PHONE:4e1a9c07]` (same) |
 | 9 digits after a TCKN cue | `100000001` | Failed(length) | `[TCKN_INCOMPLETE:b20c5d11]` |
 
-The hex values above are placeholders; real values depend on the key.
+The hex values above are illustrative. The test vectors in `crates/ortu-crypto/src/token.rs` (key bytes `0x00..0x1f`) were computed by an independent Python implementation (HKDF written from RFC 5869): `10000000146` gives `[TCKN:6bc297fb]` under tenant scope, `[TCKN:df1c492e]` in call `call-42` and `[TCKN:4501f8c7]` in call `call-43`; `+905321234567` gives `[PHONE:ebfa358c]` in call `call-42`.
 
 ## Complexity
 
@@ -130,6 +130,7 @@ One HMAC per entity (microseconds); one HKDF per call, cached in the session.
 ## Tests and invariants
 
 - Determinism: same key, kind and canonical value give the same token.
+- Independent vectors for tenant scope, call scope, every M2 kind and the `_INCOMPLETE` marker.
 - Different call ids give different tokens under call scope.
 - Every canonicalization rule has a table-driven test.
 - No token computation path can run without a key (type-level: `Tokenizer::new` requires a `SecretKey`).

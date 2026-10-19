@@ -60,7 +60,7 @@ valid(d):
 ```
 detect_tckn(lattice, cues):
     for reading in lattice.readings:
-        for each 11-digit window w in reading.digits:
+        for each word-aligned 11-digit window w in reading.digits:
             if valid(w): emit Candidate(w, validator = Passed, prior = reading.prior)
     if no Passed candidate and has_cue(Tckn, cues, window):
         for reading in lattice.readings:
@@ -114,7 +114,8 @@ O(L * R) per run, where L is the reading length and R <= 8 readings. Each checks
 
 ## Tests and invariants
 
-- Known valid and invalid vectors, including negative intermediate values in the d10 formula.
+- 22 valid and 20 invalid vectors from an independent Python implementation of the published algorithm, including a negative intermediate value (`19090909018`, intermediate -29). NVİ publishes no official vector set (ADR-0006).
 - Proptest: every generated valid TCKN is detected under every reading style.
 - Proptest: changing any single digit of a valid TCKN makes the checksum fail.
-- At least 20 positive and 20 negative unit tests (milestone M2).
+- End-to-end (`crates/ortu-tr/tests/kinds.rs`): 21 positive spoken and written readings, 23 negative cases, a partial read after a cue (`_INCOMPLETE`), a valid TCKN inside a 12-digit run, and the score floor after an assistant's question.
+- Stress: 1M random inputs through the validators and the analyzer (`cargo xtask fuzz`).

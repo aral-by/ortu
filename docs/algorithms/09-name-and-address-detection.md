@@ -43,6 +43,8 @@ flowchart LR
 
 ## Person names
 
+**M2 scope:** only the first layer runs: introducers (`adım`, `ismim`, `soyadım`, `adım soyadım`), honorifics (`Ahmet Bey`), and the caller's answer of at most four words after an assistant asks for a name. `ben X`, gazetteers and capitalization arrive in M4; without a gazetteer, `ben belediyeden arıyorum` would mask `belediyeden`. A name skips leading fillers (`adım ııı Barış`) and stops at punctuation in the source (`ismim Can, borcumu ...`). Words in `NOT_NAMES` (function words, titles such as `müdür`) and finite verbs (`-yor`, `-acağım`, ...) are never names. The lists live in `crates/ortu-tr/src/data.rs`.
+
 ### Three layers
 
 ```mermaid
@@ -64,7 +66,7 @@ flowchart TD
 detect_names(words, cues, session):
     # Layer 1: cue patterns
     for pattern in NAME_PATTERNS:                     # "adım {N}", "{N} bey", ...
-        for m in match(pattern, words.match_key):
+        for m in match(pattern, words.folded):
             emit Candidate(m.slot, PersonName or FullName, cue = pattern)
 
     # Layer 2: gazetteers (Aho-Corasick over folded forms)
